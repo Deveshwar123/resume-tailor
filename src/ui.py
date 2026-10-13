@@ -66,21 +66,47 @@ def ask_choice(prompt: str, choices: dict[str, str], default: str) -> str:
         console.print(f"  Please answer one of: {', '.join(k.upper() for k in choices)}")
 
 
+def _more_input_pending(timeout: float = 0.35) -> bool:
+    """True when more pasted lines are already waiting on the terminal."""
+    try:
+        import select
+
+        ready, _, _ = select.select([sys.stdin], [], [], timeout)
+        return bool(ready)
+    except (ImportError, ValueError, OSError):
+        return False
+
+
 def read_multiline(prompt: str) -> str:
-    """Read pasted text until a blank line (or EOF). Returns "" when not interactive."""
+    """Read pasted text until a blank line (or EOF). Returns "" when not interactive.
+
+    Job descriptions contain blank lines between paragraphs. On a real terminal
+    a blank line only ends the paste when nothing else is waiting to be read,
+    so a multi-paragraph paste arrives whole and a blank line typed afterwards
+    finishes it.
+    """
     if not is_interactive():
         return ""
     console.print(prompt)
+    on_terminal = _input_fn is input
     lines: list[str] = []
     while True:
         try:
-            line = _input_fn("")
+            if on_terminal:
+                line = sys.stdin.readline()
+                if line == "":             # Ctrl-D
+                    break
+            else:
+                line = _input_fn("")
         except EOFError:
             break
         if not line.strip():
-            if lines:          # a blank line ends the paste once there is content
-                break
-            continue
+            if not lines:
+                continue
+            if on_terminal and _more_input_pending():
+                lines.append("")           # blank line in the middle of a paste
+                continue
+            break
         lines.append(line.rstrip())
     return "\n".join(lines).strip()
 
