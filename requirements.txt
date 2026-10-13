@@ -1,0 +1,16 @@
+# Python 3.11+
+anthropic>=1.13          # official Claude API SDK (structured outputs, web search tool)
+requests>=2.31           # job page fetching
+trafilatura>=2.0         # main-text extraction from job pages
+PyYAML>=6.0              # master_resume.yaml / skills_status.yaml
+pydantic>=2.7            # schemas and validation
+docxtpl>=0.19            # template filling (pulls in python-docx)
+pypdf>=5.0               # page count and text extraction for ATS checks
+python-dotenv>=1.0       # .env loading
+rich>=13.7               # console output
+pytest>=8.0              # tests
+
+# PDF conversion uses LibreOffice (`soffice --headless`). Install it separately:
+#   macOS:  brew install --cask libreoffice
+# Optional fallback when LibreOffice is missing (drives Microsoft Word):
+#   pip install docx2pdf

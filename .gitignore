@@ -1,0 +1,21 @@
+# Secrets - the API key lives in .env only
+.env
+
+# Generated resumes, reports, and archives (may contain personal data)
+output/
+
+# Caches and local backups
+data/cache/
+data/backups/
+
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/
+~$*.docx
