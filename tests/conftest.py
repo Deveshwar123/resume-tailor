@@ -315,3 +315,24 @@ def ctx(master, status, analysis):
     from src.validate import ValidationContext
 
     return ValidationContext(master=master, status=status, analysis=analysis)
+
+
+# ---------------------------------------------------------------------------
+# Judgments
+# ---------------------------------------------------------------------------
+
+
+def make_judgment(impact: int = 8, relevance: int = 8, clarity: int = 8, language: int = 8,
+                  fixes: list[tuple[str, str, str, float]] | None = None):
+    """A Judgment; `fixes` is a list of (type, target, detail, expected_gain)."""
+    from src.models import Judgment
+
+    def cat(score: int) -> dict:
+        return {"score": score, "justification": f"scored {score}"}
+
+    return Judgment.model_validate({
+        "category_scores": {"impact": cat(impact), "relevance": cat(relevance),
+                            "clarity": cat(clarity), "language": cat(language)},
+        "fixes": [{"type": t, "target": target, "detail": detail, "expected_gain": gain}
+                  for t, target, detail, gain in (fixes or [])],
+    })

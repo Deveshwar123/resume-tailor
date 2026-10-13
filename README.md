@@ -31,7 +31,7 @@ The API key is read from `.env` only. `.env` and `output/` are gitignored.
 | 4 | Master resume fact bank, `skills_status.yaml`, evidence-based validation | done |
 | 5 | Resume tailoring (normal + `--strict`) | done |
 | 6 | DOCX/PDF rendering, page-fit optimization, ATS checks | done |
-| 7 | Independent judge + code-computed scoring | |
+| 7 | Independent judge + code-computed scoring | done |
 | 8 | Iterative revision loop | |
 | 9 | Company research with source tiers | |
 | 10 | Interview system + human approval checkpoint | |
