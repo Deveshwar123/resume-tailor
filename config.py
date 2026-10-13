@@ -433,3 +433,44 @@ TECH_LEXICON = [
     "data science", "statistics", "A/B testing", "REST", "GraphQL", "API",
     "object-oriented programming", "test automation", "agile", "scrum",
 ]
+
+# --------------------------------------------------------------------------
+# Eligibility: degree-field families (eligibility.py compares in code)
+# --------------------------------------------------------------------------
+# Two fields are "related" when they share a family. Used when a posting says
+# "Computer Science or a related field".
+FIELD_FAMILIES = {
+    "computing": [
+        "computer science", "software engineering", "computer engineering", "data science",
+        "data engineering", "data analytics", "information systems", "information technology",
+        "informatics", "cybersecurity", "artificial intelligence", "machine learning",
+        "computing", "management information systems",
+    ],
+    "quantitative": [
+        "mathematics", "applied mathematics", "statistics", "physics", "economics",
+        "quantitative finance", "financial engineering", "operations research",
+        "actuarial science", "data science", "data engineering", "data analytics",
+        "industrial engineering", "econometrics",
+    ],
+    "engineering": [
+        "engineering", "electrical engineering", "mechanical engineering", "aerospace engineering",
+        "industrial engineering", "civil engineering", "chemical engineering",
+        "computer engineering", "software engineering", "data engineering", "systems engineering",
+    ],
+    "business": [
+        "finance", "accounting", "economics", "business", "business administration",
+        "management", "marketing", "supply chain", "business analytics",
+    ],
+}
+# Umbrella terms a posting may use instead of a specific major.
+UMBRELLA_FIELDS = {
+    "stem": ["computing", "quantitative", "engineering"],
+    "technical": ["computing", "quantitative", "engineering"],
+    "quantitative": ["computing", "quantitative", "engineering"],
+    "engineering": ["engineering"],
+    "business": ["business"],
+    "analytical": ["computing", "quantitative", "engineering", "business"],
+}
+# Month an academic year is considered over (standing rolls forward in August).
+ACADEMIC_YEAR_ROLLOVER_MONTH = 8
+DEFAULT_GRAD_MONTH = 5

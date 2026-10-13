@@ -185,3 +185,87 @@ def answers(*lines: str):
         return queue.pop(0)
 
     ui.set_input(_fake_input, interactive=True)
+
+
+# ---------------------------------------------------------------------------
+# A sample posting and its (scripted) analysis
+# ---------------------------------------------------------------------------
+
+SAMPLE_POSTING = """Acme Corp - Data Engineering Intern (Summer 2027)
+Location: Austin, TX
+
+About the role
+You will build data pipelines in Python and SQL, clean and analyze datasets, and help the
+analytics team automate reporting. Interns ship production code with a mentor.
+
+Minimum qualifications
+- Currently pursuing a B.S. in Computer Science, Data Science, or a related field.
+- Expected graduation between December 2027 and June 2029.
+- Minimum GPA of 3.5.
+- Must be authorized to work in the United States without sponsorship.
+- Experience with Python and SQL.
+
+Preferred qualifications
+- Familiarity with AWS and Docker.
+- Prior internship experience is a plus.
+- Exposure to machine learning.
+"""
+
+
+def make_extract(**overrides: Any):
+    """A JobAnalysisExtract for the sample posting; override any top-level field."""
+    from src.models import JobAnalysisExtract
+
+    data: dict[str, Any] = {
+        "company": "Acme Corp",
+        "role": "Data Engineering Intern",
+        "location": "Austin, TX",
+        "job_type": "data",
+        "required_skills": [
+            {"name": "Python", "weight": 3, "kind": "language"},
+            {"name": "SQL", "weight": 3, "kind": "language"},
+        ],
+        "preferred_skills": [
+            {"name": "AWS", "weight": 2, "kind": "tool"},
+            {"name": "Docker", "weight": 1, "kind": "tool"},
+            {"name": "machine learning", "weight": 1, "kind": "technical"},
+        ],
+        "tools": ["Python", "SQL", "AWS", "Docker"],
+        "key_phrases": ["build data pipelines", "automate reporting"],
+        "responsibilities": ["Build data pipelines", "Clean and analyze datasets"],
+        "keywords": ["Python", "SQL", "data pipelines", "AWS", "Docker", "machine learning", "datasets"],
+        "requirements": {
+            "grad_year_range": {"earliest": "2027-12", "latest": "2029-06",
+                                "source": "Expected graduation between December 2027 and June 2029."},
+            "class_standing": {"allowed": [], "source": None},
+            "degree_fields": {"fields": ["Computer Science", "Data Science"], "related_fields_ok": True,
+                              "source": "Currently pursuing a B.S. in Computer Science, Data Science, or a related field."},
+            "min_gpa": {"value": 3.5, "source": "Minimum GPA of 3.5."},
+            "work_authorization": {"kind": "no_sponsorship",
+                                   "source": "Must be authorized to work in the United States without sponsorship."},
+            "prior_experience_required": {"required": False, "kind": None,
+                                          "source": "Prior internship experience is a plus."},
+            "other": [],
+        },
+    }
+    for key, value in overrides.items():
+        if key == "requirements":
+            data["requirements"].update(value)
+        else:
+            data[key] = value
+    return JobAnalysisExtract.model_validate(data)
+
+
+def make_analysis(**overrides: Any):
+    from datetime import date
+
+    from src.analyze import finalize
+    from src.fetch import JobText
+
+    return finalize(make_extract(**overrides), JobText(SAMPLE_POSTING, "https://careers.acme.com/jobs/123"),
+                    date(2026, 10, 13))
+
+
+@pytest.fixture
+def analysis():
+    return make_analysis()
