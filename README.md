@@ -28,7 +28,7 @@ The API key is read from `.env` only. `.env` and `output/` are gitignored.
 | 1 | Scaffold, config, schemas, startup checks (incl. model verification) | done |
 | 2 | Job posting extraction + paste fallback | done |
 | 3 | Job analysis + eligibility checking | done |
-| 4 | Master resume fact bank, `skills_status.yaml`, evidence-based validation | |
+| 4 | Master resume fact bank, `skills_status.yaml`, evidence-based validation | done |
 | 5 | Resume tailoring (normal + `--strict`) | |
 | 6 | DOCX/PDF rendering, page-fit optimization, ATS checks | |
 | 7 | Independent judge + code-computed scoring | |

@@ -269,3 +269,49 @@ def make_analysis(**overrides: Any):
 @pytest.fixture
 def analysis():
     return make_analysis()
+
+
+# ---------------------------------------------------------------------------
+# Draft builders (what a scripted Claude "returns" from tailor / revise)
+# ---------------------------------------------------------------------------
+
+
+def bd(text: str, fact_ids: list[str], source: str | None = None, change: str = "reworded", why: str = ""):
+    from src.models import BulletDraft
+
+    return BulletDraft(rewritten_text=text, fact_ids=fact_ids, source_bullet_id=source, change_type=change, rationale=why)
+
+
+def ed(source_id: str, bullets: list, **echo: str):
+    """An EntryDraft whose header echo matches the sample master unless overridden."""
+    from src.models import EntryDraft
+
+    known = {e["id"]: e for e in SAMPLE_MASTER["experience"] + SAMPLE_MASTER["projects"]}
+    source = known.get(source_id, {})
+    header = {
+        "org": source.get("org", source.get("name", "")),
+        "title": source.get("title", source.get("role", "")),
+        "start": source.get("dates", {}).get("start", ""),
+        "end": source.get("dates", {}).get("end", ""),
+    }
+    header.update(echo)
+    return EntryDraft(source_id=source_id, bullets=bullets, **header)
+
+
+def make_draft(experiences: list | None = None, projects: list | None = None, skills: list[str] | None = None,
+               order: list[str] | None = None, honors: list[str] | None = None,
+               coursework: list[str] | None = None, award_ids: list[str] | None = None):
+    from src.models import TailoredResumeDraft
+
+    return TailoredResumeDraft(
+        section_order=order or ["education", "experience", "projects", "skills"],
+        experiences=experiences or [], projects=projects or [], skills=skills or [],
+        honors=honors or [], coursework=coursework or [], award_ids=award_ids or [],
+    )
+
+
+@pytest.fixture
+def ctx(master, status, analysis):
+    from src.validate import ValidationContext
+
+    return ValidationContext(master=master, status=status, analysis=analysis)

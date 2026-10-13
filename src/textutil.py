@@ -66,9 +66,17 @@ def similarity(a: str, b: str) -> float:
     return difflib.SequenceMatcher(None, words(a), words(b)).ratio()
 
 
+def tight(text: str) -> str:
+    """Like `squash()` but keeps symbols that carry meaning: + % $ # & / = < >.
+
+    "30%+" and "30%" must NOT compare equal, and neither must "C" and "C++".
+    """
+    return re.sub(r"[^a-z0-9+%$#&/=<>]+", "", normalize(text))
+
+
 def same_text(a: str, b: str) -> bool:
-    """True when two strings differ only in case, punctuation, or spacing."""
-    return squash(a) == squash(b)
+    """True when two strings differ only in case, spacing, or ordinary punctuation."""
+    return tight(a) == tight(b)
 
 
 def slug(text: str, max_len: int = 40) -> str:
@@ -142,7 +150,8 @@ def _term_regex(form: str) -> re.Pattern[str]:
     body = re.sub(r"(\\ |\\-)+", r"[\\s\\-]+", body)          # "full-stack" == "full stack"
     if literal[-1].isalpha() and not literal.lower().endswith("s") and len(literal) > 3:
         body += "s?"                                          # light plural handling
-    pattern = r"(?<![A-Za-z0-9])" + body + r"(?![A-Za-z0-9+#])"
+    # "&" counts as part of a name, so "R&D" is not the language R.
+    pattern = r"(?<![A-Za-z0-9&])" + body + r"(?![A-Za-z0-9+#&])"
     return re.compile(pattern, 0 if case_sensitive else re.IGNORECASE)
 
 
@@ -447,17 +456,25 @@ def new_proper_nouns(text: str, evidence_texts: Iterable[str]) -> list[str]:
 
     The first word of the bullet is skipped (it is capitalized by position).
     """
-    evidence = squash(" ".join(evidence_texts))
+    evidence_plain = plain(" ".join(evidence_texts))
+    evidence = squash(evidence_plain)
     tokens = re.findall(r"[A-Za-z0-9][A-Za-z0-9+#./&'-]*", plain(text))
     out: list[str] = []
     for index, token in enumerate(tokens):
         token = token.rstrip(".,;:'")
+        if token.endswith("'s"):
+            token = token[:-2]
         if index == 0 or len(token) < 2:
             continue
         shaped = token[0].isupper() or any(c.isupper() for c in token[1:]) or any(c in "+#" for c in token)
-        if not shaped:
+        if not shaped or not squash(token) or token in out:
             continue
-        if squash(token) and squash(token) not in evidence and token not in out:
+        if len(token) <= 4:
+            # Short names ("AI", "SQL") must appear as whole words, not inside another word.
+            present = re.search(r"(?<![A-Za-z0-9])" + re.escape(token) + r"(?![A-Za-z0-9])", evidence_plain, re.IGNORECASE)
+        else:
+            present = squash(token) in evidence
+        if not present:
             out.append(token)
     return out
 

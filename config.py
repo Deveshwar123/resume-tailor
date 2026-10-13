@@ -313,7 +313,7 @@ SCOPE_WORDS = [
     "multiple", "all", "entire", "every", "numerous", "extensive", "comprehensive",
     "cross-functional", "mission-critical", "major", "significant", "significantly",
     "complete", "fully", "several", "various", "many", "countless", "widespread",
-    "organization", "department-wide", "single-handedly", "independently", "solely",
+    "department-wide", "single-handedly", "independently", "solely",
 ]
 COMPLEXITY_WORDS = [
     "advanced", "complex", "sophisticated", "scalable", "robust", "optimized", "optimised",
@@ -398,6 +398,7 @@ CASE_SENSITIVE_TERMS = {
     "Unity", "Ruby", "Dart", "Julia", "Hive", "Pig", "Storm", "Kafka", "Ray", "Dash",
     "Stata", "Alteryx", "Git", "Jira", "Linux", "Azure", "Canva", "Figma", "Scala",
     "Shell", "Bash", "Make", "Ant", "Maven", "Snowflake", "Airflow", "Bloomberg",
+    "React", "Express", "Rails", "Angular", "Vue", "Flutter", "Perl", "Keras",
 }
 
 # Built-in vocabulary of named tools / technologies / hard skills. A bullet that
@@ -409,7 +410,7 @@ TECH_LEXICON = [
     "Bash", "Shell", "Pine Script", "VBA", "Julia", "Dart", "Perl", "Haskell", "Solidity",
     # frameworks / libraries
     "React", "Angular", "Vue", "Next.js", "Node.js", "Express", "Django", "Flask",
-    "FastAPI", "Spring", "Spring Boot", ".NET", "Rails", "Flutter", "React Native",
+    "FastAPI", "Spring Boot", ".NET", "Rails", "Flutter", "React Native",
     "PyTorch", "TensorFlow", "Keras", "scikit-learn", "pandas", "NumPy", "SciPy",
     "Matplotlib", "Seaborn", "Plotly", "OpenCV", "LangChain", "Hugging Face", "XGBoost",
     # data
@@ -431,7 +432,7 @@ TECH_LEXICON = [
     "machine learning", "deep learning", "natural language processing", "computer vision",
     "large language models", "data analysis", "data visualization", "data engineering",
     "data science", "statistics", "A/B testing", "REST", "GraphQL", "API",
-    "object-oriented programming", "test automation", "agile", "scrum",
+    "object-oriented programming", "test automation",
 ]
 
 # --------------------------------------------------------------------------

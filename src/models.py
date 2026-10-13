@@ -392,7 +392,7 @@ class MasterResume(BaseModel):
                 if not fact.text.strip():
                     problems.append(f"fact {fact.id}: text is required")
                 for metric in fact.metrics:
-                    if textutil.squash(metric) not in textutil.squash(fact.text):
+                    if textutil.tight(metric) not in textutil.tight(fact.text):
                         problems.append(
                             f'fact {fact.id}: metric "{metric}" does not appear in the fact text'
                         )
