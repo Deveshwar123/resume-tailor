@@ -705,7 +705,7 @@ def _section_order(requested: list[SectionName], resume: TailoredResume, ctx: Va
 
 def _section_of(entry: TailoredEntry, ctx: ValidationContext) -> str:
     source = ctx.master.entry(entry.source_id)
-    return config.SECTION_FOR_TYPE.get(getattr(source, "type", "job"), "experience") if source else "experience"
+    return getattr(source, "section_name", "experience")
 
 
 # ---------------------------------------------------------------------------

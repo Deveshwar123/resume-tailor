@@ -124,6 +124,7 @@ ATS_CHECK_WEIGHTS = {
     "links": 0.5,
     "keyword_repetition": 0.5,
     "reverse_chronological": 1.0,
+    "docx_structure": 1.5,
     "page_count": 2.0,
 }
 KEYWORD_REPEAT_LIMIT = 3
@@ -191,7 +192,7 @@ PRIOR_EXPERIENCE_TYPES = {
     "work": {"job", "internship"},
     "any": {"job", "internship", "research"},
 }
-SKILL_CATEGORY_LABELS = {"languages": "Languages", "tools": "Tools and Platforms", "concepts": "Skills"}
+SKILL_CATEGORY_LABELS = {"languages": "Languages", "tools": "Tools and Platforms", "concepts": "Additional Skills"}
 GPA_LABEL = "Cumulative GPA (GPR)"
 GPA_SCALE = 4.0
 

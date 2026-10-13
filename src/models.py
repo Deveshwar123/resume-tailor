@@ -14,10 +14,11 @@ Nothing here calls the network.
 
 import re
 from enum import StrEnum
-from typing import ClassVar, Iterator
+from typing import ClassVar, Iterator, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+import config
 from src import textutil
 
 # ---------------------------------------------------------------------------
@@ -239,6 +240,7 @@ class Experience(BaseModel):
     location: str = ""
     dates: DateRange = Field(default_factory=DateRange)
     type: ExperienceType = ExperienceType.job
+    section: Literal["experience", "leadership"] | None = None   # override where it is listed
     ownership: Ownership = Ownership.contributor   # highest TRUE level for this role
     tags: list[str] = Field(default_factory=list)
     skills: list[str] = Field(default_factory=list)
@@ -248,6 +250,11 @@ class Experience(BaseModel):
     @property
     def kind(self) -> str:
         return "experience"
+
+    @property
+    def section_name(self) -> str:
+        """The resume section this role is listed under ("experience" or "leadership")."""
+        return self.section or config.SECTION_FOR_TYPE.get(self.type.value, "experience")
 
     @property
     def display_org(self) -> str:
