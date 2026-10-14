@@ -75,7 +75,7 @@ def dispatch(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         from src import insights
 
         session = startup.run_startup(need_api=False, quiet=True)
-        insights.generate(session.skills_status)
+        insights.generate(session.skills_status, session.master)
         return 0
 
     if args.find:
