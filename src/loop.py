@@ -4,6 +4,7 @@
     job_text    = fetch
     analysis    = analyze(job_text)          -> saved to data/postings/
     eligibility = check(analysis, master)    -> table, "Continue tailoring?"
+    brief       = research(company)          unless --no-research
     draft       = tailor(...) -> validate
     judgment    = judge(draft); quality = scoring.quality(judgment, ats)
 
@@ -27,7 +28,10 @@ from pathlib import Path
 from typing import Callable
 
 import config
-from src import analyze, approval, ats_check, eligibility, fetch, judge, render, revise, scoring, tailor_resume, textutil, ui
+from src import (
+    analyze, approval, ats_check, eligibility, fetch, judge, render, research, revise, scoring,
+    tailor_resume, textutil, ui,
+)
 from src.errors import TailorError, UserAbort
 from src.fetch import JobText
 from src.models import (
@@ -345,6 +349,12 @@ def run_job(session, *, url: str | None = None, text_path: Path | None = None,
                             mode=Mode.strict if options.strict else Mode.normal)
     state = RunState(options=options, job=job, analysis=analysis, eligibility=report, ctx=ctx,
                      out_dir=output_dir(analysis, today), run_date=today)
+
+    if options.research:
+        ui.step("Researching the company")
+        with ui.console.status(f"Searching the web (up to {config.MAX_RESEARCH_SEARCHES} searches)..."):
+            state.brief = research.research_company(llm, analysis, job, today)
+        ui.info(f"  {research.summarize(state.brief)}")
 
     ui.step("Tailoring" + (" (strict: my approved wording)" if options.strict else ""))
     with ui.console.status("Writing the first draft..."):

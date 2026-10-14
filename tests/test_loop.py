@@ -233,8 +233,16 @@ def workspace(tmp_path, monkeypatch):
 @needs_soffice
 def test_run_job_end_to_end(master, status, workspace):
     tmp_path, posting = workspace
+    from src.llm import SearchResult
+    from src.models import BriefItemDraft, CompanyBriefDraft
+
+    brief = CompanyBriefDraft(summary=[], values_language=[], recent_news=[], tech_stack=[],
+                              intern_work=[BriefItemDraft(text="Interns build data pipelines in Python and SQL.",
+                                                          source_url="posting")])
     llm = ScriptedLLM({
         "analyze": [make_extract()],
+        "research": [SearchResult(text="notes", sources=[], searches=2)],
+        "brief": [brief],
         "tailor": [FIRST],
         "judge": [make_judgment(7, 7, 8, 7, fixes=[REWRITE, ASK, GAP]), make_judgment(9, 9, 9, 9, fixes=[GAP]),
                   make_judgment(9, 9, 9, 9, fixes=[GAP])],
@@ -242,7 +250,10 @@ def test_run_job_end_to_end(master, status, workspace):
     })
     state = loop.run_job(Session(master=master, skills_status=status, llm=llm), text_path=posting,
                          options=RunOptions(), today=date(2026, 10, 13))
-    assert llm.purposes()[:5] == ["analyze", "tailor", "judge", "revise", "judge"]
+    assert llm.purposes()[:7] == ["analyze", "research", "brief", "tailor", "judge", "revise", "judge"]
+    assert state.brief.intern_work[0].tier.value == "posting"
+    tailor_call = next(c for c in llm.calls if c["purpose"] == "tailor")
+    assert "Interns build data pipelines in Python and SQL." in tailor_call["system"]     # research shapes emphasis
     assert state.loop.stop_reason == StopReason.target_reached and state.loop.best_round == 1
     assert state.out_dir == tmp_path / "output" / "Acme_Corp_Data_Engineering_Intern_2026-10-13"
     assert (state.out_dir / "resume.pdf").exists() and (state.out_dir / "resume.docx").exists()
@@ -267,3 +278,14 @@ def test_declining_at_the_eligibility_prompt_stops_the_run(master, status, works
     with pytest.raises(UserAbort):
         loop.run_job(Session(master=master, skills_status=status, llm=llm), text_path=posting, today=date(2026, 10, 13))
     assert llm.purposes() == ["analyze"]                                    # nothing was tailored
+
+
+
+@needs_soffice
+def test_no_research_flag_skips_the_web_search(master, status, workspace):
+    _tmp, posting = workspace
+    llm = ScriptedLLM({"analyze": [make_extract()], "tailor": [FIRST], "judge": [make_judgment(9, 9, 9, 9)]})
+    state = loop.run_job(Session(master=master, skills_status=status, llm=llm), text_path=posting,
+                         options=RunOptions(research=False), today=date(2026, 10, 13))
+    assert "research" not in llm.purposes() and state.brief is None
+    assert state.loop.stop_reason == StopReason.target_reached and state.rendered.pages == 1
