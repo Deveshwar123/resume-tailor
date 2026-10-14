@@ -147,8 +147,9 @@ def test_application_is_logged_to_csv(run):
     assert row["date"] == "2026-10-13" and row["company"] == "Acme Corp" and row["role"] == "Data Engineering Intern"
     assert row["quality"] == f"{state.final_quality.total:.2f}" and row["rounds"] == "1" and row["status"] == "drafted"
     assert "GPA: Doesn't meet" in row["eligibility_flags"] and row["output_folder"].endswith("Acme_Corp_Data_Engineering_Intern_2026-10-13")
-    report.append_application(state)                         # a second run appends; the header is not repeated
-    assert len(report.read_applications()) == 2
+    log = tmp_path / "applications.csv"
+    report.append_application(state, log)                    # a second run appends; the header is not repeated
+    assert len(report.read_applications(log)) == 2
 
 
 @needs_soffice
@@ -174,11 +175,12 @@ def test_archive_snapshots_exactly_what_was_produced(run):
 @needs_soffice
 def test_find_lists_matching_archives(run):
     state, tmp_path = run
-    assert [m["company"] for m in archive.find("acme")] == ["Acme Corp"]
-    assert archive.find("ACME corp")[0]["folder"] == str(state.out_dir)
-    assert archive.find("data engineering")                    # the role matches too
-    assert archive.find("globex") == [] and archive.print_matches("globex") == []
-    assert len(archive.print_matches("Acme")) == 1
+    root = tmp_path / "output"
+    assert [m["company"] for m in archive.find("acme", root)] == ["Acme Corp"]
+    assert archive.find("ACME corp", root)[0]["folder"] == str(state.out_dir)
+    assert archive.find("data engineering", root)              # the role matches too
+    assert archive.find("globex", root) == [] and archive.print_matches("globex", root) == []
+    assert len(archive.print_matches("Acme", root)) == 1
 
 
 # ---------------------------------------------------------------------------

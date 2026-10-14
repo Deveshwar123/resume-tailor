@@ -369,3 +369,10 @@ def test_startup_without_api_needs_no_key(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "ENV_PATH", tmp_path / ".env")
     session = startup.run_startup(need_api=False, quiet=True)
     assert session.llm is None and session.master.experience
+
+
+def test_tests_never_point_at_my_real_data_files():
+    """Guard for issue #1: during tests no writable data path may live inside the repo."""
+    for name in ("OUTPUT_DIR", "POSTINGS_DIR", "BACKUP_DIR", "APPLICATIONS_CSV", "CACHE_DIR"):
+        path = getattr(config, name).resolve()
+        assert config.ROOT.resolve() not in path.parents, f"{name} still points into the repo: {path}"

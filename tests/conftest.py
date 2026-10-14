@@ -167,6 +167,28 @@ def scripted() -> ScriptedLLM:
     return ScriptedLLM()
 
 
+@pytest.fixture(scope="session")
+def _shared_cache(tmp_path_factory):
+    """One cache folder for the whole session (keeps LibreOffice's profile warm)."""
+    return tmp_path_factory.mktemp("cache")
+
+
+@pytest.fixture(autouse=True)
+def _isolated_data_paths(tmp_path, monkeypatch, _shared_cache):
+    """No test may read or write my real data: every data path points at a temp folder.
+
+    Isolation used to depend on each test patching each path; one that forgot
+    APPLICATIONS_CSV appended fake rows to the real log (issue #1).
+    """
+    import config
+
+    monkeypatch.setattr(config, "OUTPUT_DIR", tmp_path / "output")
+    monkeypatch.setattr(config, "POSTINGS_DIR", tmp_path / "postings")
+    monkeypatch.setattr(config, "BACKUP_DIR", tmp_path / "backups")
+    monkeypatch.setattr(config, "APPLICATIONS_CSV", tmp_path / "applications.csv")
+    monkeypatch.setattr(config, "CACHE_DIR", _shared_cache)
+
+
 @pytest.fixture(autouse=True)
 def _non_interactive():
     """Prompts never block in tests unless a test opts in with ui.set_input."""
