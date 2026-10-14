@@ -35,7 +35,7 @@ The API key is read from `.env` only. `.env` and `output/` are gitignored.
 | 8 | Iterative revision loop | done |
 | 9 | Company research with source tiers | done |
 | 10 | Interview system + human approval checkpoint | done |
-| 11 | Reports, archive, application tracking, cost monitoring | |
+| 11 | Reports, archive, application tracking, cost monitoring | done |
 | 12 | Application intelligence dashboard | |
 | 13 | Batch processing + optional cover letter | |
 

@@ -17,7 +17,8 @@
     if below target and the judge has questions for me (and interviews are on):
         interview -> new facts (with my OK) -> re-tailor -> loop once more
 
-    approval checkpoint -> render -> page-fit -> ats_check -> scores -> summary
+    approval checkpoint -> render -> page-fit -> ats_check
+    job match + keyword coverage -> report -> archive -> applications.csv -> summary
 
 Only Resume Quality drives the loop. Job Match and Keyword Coverage are
 informational and never trigger a revision.
@@ -32,8 +33,8 @@ from typing import Callable
 
 import config
 from src import (
-    analyze, approval, ats_check, eligibility, fetch, interview, judge, render, research, revise, scoring,
-    tailor_resume, textutil, ui,
+    analyze, approval, archive, ats_check, eligibility, fetch, interview, judge, render, report, research,
+    revise, scoring, tailor_resume, textutil, ui,
 )
 from src.errors import TailorError, UserAbort
 from src.fetch import JobText
@@ -386,13 +387,13 @@ def run_job(session, *, url: str | None = None, text_path: Path | None = None,
         ui.warn(f'A quoted requirement was not found word-for-word in the posting: "{quote[:90]}"')
 
     ui.step("Checking eligibility")
-    report = eligibility.check_eligibility(analysis, master, status, llm=llm, posting_text=job.text, today=today)
-    if not eligibility.confirm_continue(report, batch=options.batch):
+    eligible = eligibility.check_eligibility(analysis, master, status, llm=llm, posting_text=job.text, today=today)
+    if not eligibility.confirm_continue(eligible, batch=options.batch):
         raise UserAbort("Stopped at the eligibility check - nothing was tailored.")
 
     ctx = ValidationContext(master=master, status=status, analysis=analysis,
                             mode=Mode.strict if options.strict else Mode.normal)
-    state = RunState(options=options, job=job, analysis=analysis, eligibility=report, ctx=ctx,
+    state = RunState(options=options, job=job, analysis=analysis, eligibility=eligible, ctx=ctx,
                      out_dir=output_dir(analysis, today), run_date=today)
 
     if options.research:
@@ -420,7 +421,13 @@ def run_job(session, *, url: str | None = None, text_path: Path | None = None,
 
     ui.step("Scoring")
     step_scores(state, llm, loop_text)
-    print_summary(state, getattr(llm, "tracker", None))
+
+    ui.step("Writing reports and archiving this version")
+    tracker = getattr(llm, "tracker", None)
+    report.write_reports(state, tracker)
+    archive.write_archive(state, tracker)
+    report.append_application(state)
+    print_summary(state, tracker)
     return state
 
 
