@@ -388,3 +388,44 @@ def test_declining_at_the_eligibility_prompt_is_not_an_error(monkeypatch, capsys
     monkeypatch.setattr(tailor, "dispatch", stop)
     assert tailor.main(["https://example.com/job"]) == 0
     assert "ERROR" not in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# Issue #2: billing problems must surface in --check, in plain words
+# ---------------------------------------------------------------------------
+
+CREDIT_BODY = {"type": "error", "error": {"type": "invalid_request_error",
+               "message": "Your credit balance is too low to access the Anthropic API. Please go to Plans & Billing."}}
+
+
+def _credit_error():
+    request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
+    return anthropic.BadRequestError("Error code: 400 - " + str(CREDIT_BODY),
+                                     response=httpx2.Response(400, request=request), body=CREDIT_BODY)
+
+
+def test_out_of_credits_is_a_plain_message_with_the_next_step():
+    llm = LLM(FakeClient(stable=[_credit_error()]))
+    with pytest.raises(LLMError) as info:
+        llm.parse(purpose="analyze", model="claude-haiku-5-5", system="s", user="u", schema=Thing)
+    assert info.value.message == "Your Anthropic API account is out of credits."
+    assert "Plans & Billing" in info.value.hint and "Error code" not in str(info.value)
+
+
+def test_other_api_errors_show_the_apis_own_message():
+    request = httpx2.Request("POST", "https://api.anthropic.com/v1/messages")
+    body = {"type": "error", "error": {"type": "invalid_request_error", "message": "max_tokens: too large"}}
+    llm = LLM(FakeClient(stable=[anthropic.BadRequestError("Error code: 400 - " + str(body),
+                                                           response=httpx2.Response(400, request=request), body=body)]))
+    with pytest.raises(LLMError) as info:
+        llm.parse(purpose="judge", model="claude-haiku-5-5", system="s", user="u", schema=Thing)
+    assert info.value.message == "The Anthropic API rejected the request: max_tokens: too large"
+
+
+def test_check_makes_a_tiny_real_request_so_an_empty_account_fails_it():
+    ok = FakeClient(stable=[_response(None)])
+    LLM(ok).verify_access("claude-haiku-5-5")
+    sent = ok.messages.calls[0]
+    assert sent["max_tokens"] <= 64 and sent["model"] == "claude-haiku-5-5"
+    with pytest.raises(ConfigError, match="out of credits"):
+        LLM(FakeClient(stable=[_credit_error()])).verify_access("claude-haiku-5-5")

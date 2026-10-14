@@ -85,7 +85,7 @@ def dispatch(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
         return 0
 
     if args.check:
-        startup.run_startup(need_api=True)
+        startup.run_startup(need_api=True, test_call=True)
         ui.success("startup checks passed")
         return 0
 

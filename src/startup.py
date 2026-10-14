@@ -53,7 +53,8 @@ def read_api_key(env: dict[str, str]) -> str:
     return key
 
 
-def run_startup(*, need_api: bool = True, verify_models: bool = True, quiet: bool = False) -> Session:
+def run_startup(*, need_api: bool = True, verify_models: bool = True, quiet: bool = False,
+                test_call: bool = False) -> Session:
     """Run every startup check in order and return the session.
 
     `need_api=False` is used by commands that never call Claude
@@ -70,6 +71,8 @@ def run_startup(*, need_api: bool = True, verify_models: bool = True, quiet: boo
         llm = LLM.from_key(read_api_key(env))
         if verify_models:
             llm.verify_models([config.FAST_MODEL, config.WRITE_MODEL])
+        if test_call:
+            llm.verify_access(config.FAST_MODEL)
 
     if not quiet:
         facts = sum(len(e.facts) for e in master.entries())
@@ -79,6 +82,8 @@ def run_startup(*, need_api: bool = True, verify_models: bool = True, quiet: boo
         )
         if llm is not None and verify_models:
             ui.success(f"models verified: {config.FAST_MODEL} (fast), {config.WRITE_MODEL} (write)")
+        if llm is not None and test_call:
+            ui.success("test request succeeded (the key can make calls and the account has credits)")
         for warning in warnings:
             ui.warn(warning)
     return Session(master=master, skills_status=skills_status, llm=llm, warnings=warnings)

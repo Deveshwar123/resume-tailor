@@ -144,6 +144,27 @@ def _block_dicts(content: Any) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
+BILLING_HINT = ("Add credits under Plans & Billing in the Claude Console (https://platform.claude.com), "
+                "then run `python tailor.py --check`. API usage is billed separately from a Claude.ai subscription.")
+
+
+def api_message(exc: Exception) -> str:
+    """The API's own error message, without the SDK's "Error code: 400 - {...}" wrapper."""
+    body = getattr(exc, "body", None)
+    if isinstance(body, dict):
+        error = body.get("error")
+        if isinstance(error, dict) and error.get("message"):
+            return str(error["message"])
+        if body.get("message"):
+            return str(body["message"])
+    return str(getattr(exc, "message", "") or exc)
+
+
+def is_out_of_credits(exc: Exception) -> bool:
+    text = api_message(exc).lower()
+    return "credit balance" in text or getattr(exc, "type", None) == "billing_error" or getattr(exc, "status_code", None) == 402
+
+
 class LLM:
     """All Claude access for the project."""
 
@@ -188,7 +209,7 @@ class LLM:
         except anthropic.AuthenticationError as exc:
             raise LLMError("The Anthropic API rejected the API key.", "Check ANTHROPIC_API_KEY in .env.") from exc
         except anthropic.PermissionDeniedError as exc:
-            raise LLMError(f"The API key is not allowed to use {model}: {exc.message}") from exc
+            raise LLMError(f"The API key is not allowed to use {model}: {api_message(exc)}") from exc
         except anthropic.NotFoundError as exc:
             raise LLMError(f'Model "{model}" was not found.', "Set FAST_MODEL / WRITE_MODEL in config.py or .env.") from exc
         except anthropic.RateLimitError as exc:
@@ -197,8 +218,12 @@ class LLM:
                 "Wait a minute and run the command again.",
             ) from exc
         except anthropic.BadRequestError as exc:
-            raise LLMError(f"The Anthropic API rejected the request: {exc.message}") from exc
+            if is_out_of_credits(exc):
+                raise LLMError("Your Anthropic API account is out of credits.", BILLING_HINT) from exc
+            raise LLMError(f"The Anthropic API rejected the request: {api_message(exc)}") from exc
         except anthropic.APIStatusError as exc:
+            if is_out_of_credits(exc):
+                raise LLMError("Your Anthropic API account is out of credits.", BILLING_HINT) from exc
             kind = "overloaded" if exc.status_code == 529 else "unavailable"
             raise LLMError(
                 f"The Anthropic API is {kind} (HTTP {exc.status_code}; gave up after {config.API_MAX_RETRIES} retries).",
@@ -303,6 +328,25 @@ class LLM:
             unique.setdefault(url, title)
         return SearchResult("".join(texts).strip(), list(unique.items()), searches, sorted(set(errors)))
 
+    def verify_access(self, model: str) -> None:
+        """One tiny request, so a key that lists models but cannot make calls fails here.
+
+        Costs a few tokens. Used by `--check` only.
+        """
+        try:
+            self.client.messages.create(
+                model=model, max_tokens=64, output_config={"effort": "low"},
+                messages=[{"role": "user", "content": "Reply with the word ok."}],
+            )
+        except anthropic.AuthenticationError as exc:
+            raise ConfigError("The Anthropic API rejected the API key.", "Check ANTHROPIC_API_KEY in .env.") from exc
+        except anthropic.APIStatusError as exc:
+            if is_out_of_credits(exc):
+                raise ConfigError("Your Anthropic API account is out of credits.", BILLING_HINT) from exc
+            raise ConfigError(f"A test request to {model} failed (HTTP {exc.status_code}): {api_message(exc)}") from exc
+        except anthropic.APIConnectionError as exc:
+            raise ConfigError("Could not reach the Anthropic API.", "Check your internet connection.") from exc
+
     def verify_models(self, model_ids: list[str]) -> None:
         """Fail fast when a configured model ID is not available to this key."""
         missing: list[str] = []
@@ -322,6 +366,6 @@ class LLM:
         except anthropic.AuthenticationError as exc:
             raise ConfigError("The Anthropic API rejected the API key.", "Check ANTHROPIC_API_KEY in .env.") from exc
         except anthropic.APIStatusError as exc:
-            raise ConfigError(f"Could not verify models (HTTP {exc.status_code}): {exc.message}") from exc
+            raise ConfigError(f"Could not verify models (HTTP {exc.status_code}): {api_message(exc)}") from exc
         except anthropic.APIConnectionError as exc:
             raise ConfigError("Could not reach the Anthropic API to verify models.", "Check your internet connection.") from exc
