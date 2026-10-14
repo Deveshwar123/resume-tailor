@@ -30,6 +30,21 @@ BACKUP_DIR = DATA_DIR / "backups"         # timestamped master_resume.yaml backu
 OUTPUT_DIR = ROOT / "output"              # gitignored
 
 # --------------------------------------------------------------------------
+# Backend: how the Claude calls are made (see src/backends.py)
+#   anthropic   - Anthropic API key in .env (billed per token)
+#   claude_code - `claude -p`, using the Claude subscription you are logged into
+#   ollama      - a local model through Ollama (free, offline, no web research)
+# --------------------------------------------------------------------------
+LLM_BACKEND = os.environ.get("LLM_BACKEND", "anthropic")
+CLAUDE_CODE_BIN = os.environ.get("CLAUDE_CODE_BIN", "claude")
+CLAUDE_CODE_TIMEOUT_SECONDS = 900
+OLLAMA_HOST = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "qwen3:8b")          # plays the WRITE_MODEL part
+OLLAMA_FAST_MODEL = os.environ.get("OLLAMA_FAST_MODEL", "")        # plays the FAST_MODEL part ("" = same model)
+OLLAMA_NUM_CTX = 16384                                              # the fact-bank prompt needs a long context
+OLLAMA_TIMEOUT_SECONDS = 1800
+
+# --------------------------------------------------------------------------
 # Models (verified against the API at startup; see src/startup.py)
 # --------------------------------------------------------------------------
 FAST_MODEL = os.environ.get("FAST_MODEL", "claude-haiku-5-5")    # analyze, judge, interpret

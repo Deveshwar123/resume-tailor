@@ -62,6 +62,7 @@ Filling the output
 - `honors`, `coursework`: items copied exactly from the education entry that are worth the space for this job (either may be empty).
 - `award_ids`: ids of awards worth including (may be empty).
 - `section_order`: the order of the sections for this job (education, experience, projects, leadership, skills, awards).
+- Layout is fixed by code: within a section, entries are always listed newest first, whatever order you return. Give the most relevant work its weight through which entries you include, how many bullets each gets, the order of its bullets, the wording, and the order of sections. Leave out entries that add little for this job (for example, a membership whose only fact is attending meetings) unless the page would otherwise be thin.
 {mode_rules}"""
 
 NORMAL_RULES = """

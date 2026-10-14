@@ -35,11 +35,26 @@ cp .env.example .env                     # then put your Anthropic API key in .e
 python tailor.py --check                 # verifies the key, both model IDs, and your data files
 ```
 
-- The API key is read from `.env` **only**. `.env` and `output/` are gitignored.
+- The API key is read from `.env` **only**. `.env` and `output/` are gitignored. No API credits? See
+  "Running without API credits" below.
 - `--check` asks the API whether the two configured models exist. If one does not, it prints the
   model IDs your key can use and stops. Change models in `config.py` or with `FAST_MODEL=` /
   `WRITE_MODEL=` lines in `.env`.
 - Without LibreOffice, `pip install docx2pdf` works as a fallback if Microsoft Word is installed.
+
+### Running without API credits
+
+Claude calls can run three ways. Pick one with `LLM_BACKEND=` in `.env`:
+
+| `LLM_BACKEND` | What it uses | Cost | Notes |
+|---|---|---|---|
+| `claude_code` | `claude -p` (Claude Code) with the Claude subscription you are logged into | no API credits; counts toward your plan's usage limits | Same Claude models; web research works. A full run took about 4 minutes in testing. |
+| `ollama` | a local model through [Ollama](https://ollama.com) (default `qwen3:8b`, about 5 GB: `ollama pull qwen3:8b`) | free, offline | No company research (no web search). Slower (the analysis step took about 75 s on an M1 Pro) and weaker writing; the validator still blocks anything your facts do not support. |
+| `anthropic` | the API key in `.env` | billed per token (needs API credits) | The original design. |
+
+For one run only: `LLM_BACKEND=ollama python tailor.py <job_url>` (a variable set in the shell beats `.env`).
+Set `OLLAMA_MODEL` (and optionally a smaller `OLLAMA_FAST_MODEL` for the analysis and judge steps) to
+use a different local model.
 
 Before your first real run, **review `master_resume.yaml`** (see "Writing facts" below). The header
 of that file lists what needs your confirmation.
@@ -338,7 +353,7 @@ output/                 results (gitignored)
 ```
 
 Beyond the original spec (all additive): `llm.py`, `store.py`, `textutil.py`, `relevance.py`,
-`ui.py`, `cover_letter.py`; an `awards` list and an experience type `program` (competitions,
+`ui.py`, `cover_letter.py`, `backends.py` (Claude Code and Ollama); an `awards` list and an experience type `program` (competitions,
 workshops) in the fact bank; an optional `section:` per experience; a JSON-LD fallback when a job
 page renders with JavaScript; a `<Name>_Resume.pdf` copy; `--check`; and a final re-judge when
 approval or page fitting changed the text after the loop.
@@ -365,7 +380,13 @@ yet from this checkout: `python tailor.py --check` is the first thing to run onc
 
 ## Troubleshooting
 
-- **"No .env file" / "ANTHROPIC_API_KEY is missing"** - copy `.env.example` to `.env` and add the key.
+- **"No .env file" / "ANTHROPIC_API_KEY is missing"** - copy `.env.example` to `.env` and add the key,
+  or set `LLM_BACKEND=claude_code` / `ollama` there to run without one.
+- **"Your Anthropic API account is out of credits"** - add credits, or switch `LLM_BACKEND`.
+- **"Your Claude subscription's usage limit has been reached"** - wait for it to reset, or use
+  `LLM_BACKEND=ollama` for now.
+- **"Ollama is not running"** - open the Ollama app; **"Ollama does not have the model"** - run the
+  `ollama pull` command it prints.
 - **"These configured models are not available"** - use one of the IDs it lists.
 - **"blocked the request" / "only N words were extracted"** - the site needs a login. Paste the
   description when asked, or save it to a file and use `--text`.

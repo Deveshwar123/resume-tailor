@@ -30,8 +30,10 @@ class Session:
 def load_env() -> dict[str, str]:
     """Read `.env` (and only `.env`) and apply model overrides to config."""
     values = {k: v for k, v in dotenv_values(config.ENV_PATH).items() if v is not None}
-    for name in ("FAST_MODEL", "WRITE_MODEL"):
-        override = (values.get(name) or os.environ.get(name) or "").strip()
+    for name in ("FAST_MODEL", "WRITE_MODEL", "LLM_BACKEND", "CLAUDE_CODE_BIN",
+                 "OLLAMA_HOST", "OLLAMA_MODEL", "OLLAMA_FAST_MODEL"):
+        # A variable set in the shell beats .env, so `LLM_BACKEND=ollama python tailor.py ...` works for one run.
+        override = (os.environ.get(name) or values.get(name) or "").strip()
         if override:
             setattr(config, name, override)
     return values
@@ -53,6 +55,27 @@ def read_api_key(env: dict[str, str]) -> str:
     return key
 
 
+def backend_needs_test_call() -> bool:
+    """Only the API backend needs an extra request: the others already made one while verifying models."""
+    return (config.LLM_BACKEND or "anthropic").strip().lower() == "anthropic"
+
+
+def make_llm(env: dict[str, str]):
+    """Build the client for the configured backend (LLM_BACKEND in .env)."""
+    backend = (config.LLM_BACKEND or "anthropic").strip().lower()
+    if backend == "anthropic":
+        return LLM.from_key(read_api_key(env))
+    if backend == "claude_code":
+        from src.backends import ClaudeCodeLLM
+
+        return ClaudeCodeLLM()
+    if backend == "ollama":
+        from src.backends import OllamaLLM
+
+        return OllamaLLM()
+    raise ConfigError(f'Unknown LLM_BACKEND "{config.LLM_BACKEND}".', "Use anthropic, claude_code, or ollama.")
+
+
 def run_startup(*, need_api: bool = True, verify_models: bool = True, quiet: bool = False,
                 test_call: bool = False) -> Session:
     """Run every startup check in order and return the session.
@@ -66,12 +89,12 @@ def run_startup(*, need_api: bool = True, verify_models: bool = True, quiet: boo
     skills_status = store.load_skills_status()
     warnings = store.data_warnings(master, skills_status)
 
-    llm: LLM | None = None
+    llm = None
     if need_api:
-        llm = LLM.from_key(read_api_key(env))
+        llm = make_llm(env)
         if verify_models:
             llm.verify_models([config.FAST_MODEL, config.WRITE_MODEL])
-        if test_call:
+        if test_call and backend_needs_test_call():
             llm.verify_access(config.FAST_MODEL)
 
     if not quiet:
@@ -81,8 +104,13 @@ def run_startup(*, need_api: bool = True, verify_models: bool = True, quiet: boo
             f"{facts} facts; {len(skills_status.skills)} skills tracked"
         )
         if llm is not None and verify_models:
-            ui.success(f"models verified: {config.FAST_MODEL} (fast), {config.WRITE_MODEL} (write)")
-        if llm is not None and test_call:
+            if config.LLM_BACKEND == "ollama":
+                local = config.OLLAMA_FAST_MODEL or config.OLLAMA_MODEL
+                ui.success(f"local models ready via Ollama: {config.OLLAMA_MODEL} (write), {local} (fast)")
+            else:
+                via = " via Claude Code (your Claude subscription)" if config.LLM_BACKEND == "claude_code" else ""
+                ui.success(f"models verified{via}: {config.FAST_MODEL} (fast), {config.WRITE_MODEL} (write)")
+        if llm is not None and test_call and config.LLM_BACKEND == "anthropic":
             ui.success("test request succeeded (the key can make calls and the account has credits)")
         for warning in warnings:
             ui.warn(warning)

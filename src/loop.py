@@ -193,6 +193,7 @@ class RunState:
     coverage_master: KeywordCoverage | None = None
     coverage_final: KeywordCoverage | None = None
     stop_note: str = ""
+    billing: str = "api"                      # api | subscription | local (how Claude calls are paid for)
     notes: list[str] = field(default_factory=list)
     loops: list[LoopResult] = field(default_factory=list)          # every loop run (before / after the interview)
     decisions: list[approval.Decision] = field(default_factory=list)
@@ -376,8 +377,15 @@ def print_summary(state: RunState, tracker=None) -> None:
     lines += ["", f"Output: {state.out_dir}"]
     if tracker is not None and tracker.calls:
         tokens_in, tokens_out = tracker.total_tokens()
-        lines.append(f"Claude usage: {len(tracker.calls)} calls, {tokens_in:,} in / {tokens_out:,} out tokens, "
-                     f"about ${tracker.total_cost():.3f}")
+        usage = f"{len(tracker.calls)} calls, {tokens_in:,} in / {tokens_out:,} out tokens"
+        billing = getattr(state, "billing", "api")
+        if billing == "subscription":
+            lines.append(f"Claude usage: {usage} - covered by your Claude subscription "
+                         f"(API price would be about ${tracker.total_cost():.3f})")
+        elif billing == "local":
+            lines.append(f"Local model usage: {usage} - free")
+        else:
+            lines.append(f"Claude usage: {usage}, about ${tracker.total_cost():.3f}")
     ui.panel("Summary", "\n".join(line for line in lines if line is not None), style="green" if met else "yellow")
 
 
@@ -416,9 +424,11 @@ def run_job(session, *, url: str | None = None, text_path: Path | None = None,
     ctx = ValidationContext(master=master, status=status, analysis=analysis,
                             mode=Mode.strict if options.strict else Mode.normal)
     state = RunState(options=options, job=job, analysis=analysis, eligibility=eligible, ctx=ctx,
-                     out_dir=output_dir(analysis, today), run_date=today)
+                     out_dir=output_dir(analysis, today), run_date=today, billing=getattr(llm, "billing", "api"))
 
-    if options.research:
+    if options.research and not getattr(llm, "can_search", True):
+        ui.info("  Company research skipped: the local model cannot search the web.")
+    elif options.research:
         ui.step("Researching the company")
         with ui.console.status(f"Searching the web (up to {config.MAX_RESEARCH_SEARCHES} searches)..."):
             state.brief = research.research_company(llm, analysis, job, today)

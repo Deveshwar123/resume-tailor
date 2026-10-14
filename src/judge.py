@@ -30,6 +30,10 @@ Categories (integer 1-10 each, with a one-line justification)
 
 Score anchors: 9-10 means you would send it on with no edits. 7-8 is solid with a few fixable weaknesses. 5-6 has several weak or off-target bullets. 4 or below is mostly weak. Reserve 9 and 10 for resumes that truly earn them.
 
+Fixed layout rules (do not ask to change these; they are applied by code for applicant-tracking systems):
+- Within each section, entries are always listed newest first. Never ask to move an entry above or below another entry in the same section. To give an entry more or less weight, ask to change its bullets, cut it, or change the order of whole sections.
+- The page is one page; section headings and the date format are fixed.
+
 Fixes (most valuable first)
 - REWRITE: an improvement that needs no new information about the candidate - rewording a bullet, cutting filler, reordering sections, entries, or bullets, leading with a stronger verb that the bullet already supports, replacing low-relevance content with more relevant content already implied on the page. Never ask for a number, tool, or responsibility that is not on the page as a REWRITE.
 - ASK_USER: the candidate might have relevant experience or detail that is not on the resume (a metric, a tool they used, a result). Write `detail` as a direct question to the candidate.
