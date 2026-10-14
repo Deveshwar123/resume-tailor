@@ -401,6 +401,42 @@ def is_ambiguous_ownership(lemma: str) -> bool:
     return lemma in config.AMBIGUOUS_OWNERSHIP_VERBS
 
 
+_OBJECT_END_RE = re.compile(
+    r"[,;:.]|\b(?:of|for|in|on|at|with|through|across|to|from|by|during|while|within|and|or|that|which|who)\b",
+    re.IGNORECASE,
+)
+
+
+def acts_on_people(text: str, lemma: str) -> bool:
+    """True when `lemma`'s direct object is people ("managed a 4-person team", "managed interns").
+
+    The object is the phrase after the verb up to the next preposition, conjunction, or
+    punctuation. A people noun in it counts when it is the head of the phrase: the last word
+    ("a team of 5" -> "team") or followed by a participle ("a team developing an app"). A people
+    noun that only modifies another noun does not count ("team funds", "student records",
+    "the team's roadmap"). A verb with no object is read as acting on people, the cautious reading.
+    """
+    def is_people(word: str) -> bool:
+        base = word.lower().removesuffix("'s")
+        return base in config.PEOPLE_NOUNS or base.removesuffix("s") in config.PEOPLE_NOUNS
+
+    source = plain(text)
+    for form in verb_forms(lemma):
+        for m in re.finditer(r"(?<![A-Za-z-])" + re.escape(form) + r"(?![A-Za-z])", source, re.IGNORECASE):
+            phrase = _OBJECT_END_RE.split(source[m.end():], maxsplit=1)[0]
+            tokens = re.findall(r"[A-Za-z]+(?:'s)?", phrase)
+            if not tokens:
+                return True
+            for index, token in enumerate(tokens):
+                if not is_people(token):
+                    continue
+                following = tokens[index + 1].lower() if index + 1 < len(tokens) else ""
+                possessive = token.lower().endswith("'s")
+                if not following or (not possessive and (following.endswith(("ing", "ed")) or is_people(following))):
+                    return True
+    return False
+
+
 def downgrade_qualifiers(text: str) -> set[str]:
     """Helper-role verbs present in `text` ("assisted", "helped", ...)."""
     return {lemma for lemma in ownership_terms(text) if lemma in config.DOWNGRADE_QUALIFIERS}

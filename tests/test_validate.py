@@ -362,3 +362,52 @@ def test_recheck_validates_a_single_edited_bullet(ctx):
     assert validate.recheck(ASSISTED, "exp_acme", ["exp_acme_f01"], "exp_acme_b01", ctx) == []
     found = validate.recheck("Led a 9-person team building a Rust application", "exp_acme", ["exp_acme_f01"], None, ctx)
     assert {"B1", "B2", "B3"} <= {v.code for v in found if v.severity == Severity.hard}
+
+
+# ---------------------------------------------------------------------------
+# "manage" depends on what is managed
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("text,people", [
+    ("Managed a 4-person team developing a Python application", True),
+    ("Managed a team of 5 engineers", True),
+    ("Managed interns and volunteers", True),
+    ("Managed and mentored three interns", True),          # no object of its own: the cautious reading
+    ("Raised and managed team funds through grant writing", False),
+    ("Managed student records for the club", False),
+    ("Managed the engineering team's roadmap", False),
+    ("Manage library materials and records", False),
+])
+def test_acts_on_people(text, people):
+    from src import textutil
+
+    assert textutil.acts_on_people(text, "manage") is people
+
+
+def test_managing_things_goes_to_approval_but_managing_people_fails(ctx):
+    people = run(ctx, "Managed a 4-person team developing a Python application", ["exp_acme_f01"])
+    assert "B3" in codes(people, Severity.hard) and only_bullet(people).text == ASSISTED
+    things = run(ctx, "Assisted a 4-person team and managed the Python application backlog", ["exp_acme_f01"])
+    assert "B3" not in codes(things, Severity.hard)
+    bullet = only_bullet(things)
+    assert bullet.approval == Approval.pending and any('"manage" (lead level)' in f.message for f in bullet.flags)
+
+
+def test_rewrites_name_the_words_they_add(ctx):
+    reworded = only_bullet(run(ctx, "Assisted a 4-person team shipping a Python application for acceptance testing",
+                               ["exp_acme_f01"], source="exp_acme_b01"))
+    change = next(f for f in reworded.flags if f.code == "change")
+    assert change.message == "reworded from the verified source wording; new words: shipping, acceptance, testing"
+    # A minor change is auto-approved, and what it added is still recorded for changes.md.
+    minor = only_bullet(run(ctx, "Assisted a 4-person team in developing a Python application with stakeholders",
+                            ["exp_acme_f01"], source="exp_acme_b01", change="minor_wording"))
+    assert minor.approval == Approval.auto
+    assert minor.history == ["auto-approved minor wording change; new words: stakeholders"]
+
+
+def test_new_words_compare_hyphenated_words_by_part():
+    from src.validate import new_words
+
+    assert new_words("Presented findings over two years", ["Presented findings across a two-year program"]) == []
+    assert new_words("Taught block coding", ["Delivered block-code instruction"]) == ["taught"]

@@ -185,6 +185,26 @@ def loosely_supported(term: str, evidence_text: str) -> bool:
     return bool(wanted) and all(any(_stems_match(w, h) for h in have) for w in wanted)
 
 
+def new_words(text: str, evidence_texts: Iterable[str], limit: int = 8) -> list[str]:
+    """Content words in `text` that have no same-stem word in the evidence, in order of appearance.
+
+    Shown beside a rewrite at the approval checkpoint so I can see at a glance what was added.
+    """
+    def parts(word: str) -> list[str]:
+        return [word, *[p for p in word.split("-") if p and p != word]]
+
+    have = [_stem(p) for evidence in evidence_texts for w in textutil.words(evidence) for p in parts(w)]
+    wanted = textutil.content_words(text)
+    out: list[str] = []
+    for word in textutil.words(text):
+        if word not in wanted or word in out:
+            continue
+        pieces = [p for p in parts(word) if p not in textutil._STOPWORDS] or [word]
+        if not all(any(_stems_match(_stem(p), h) for h in have) for p in pieces[1:] or pieces):
+            out.append(word)
+    return out[:limit]
+
+
 def is_verbatim(text: str, ev: Evidence) -> bool:
     """The bullet is wording I already verified, so it needs no evidence check."""
     if ev.source_bullet is not None and ev.source_bullet.approved and textutil.same_text(text, ev.source_bullet.text):
@@ -251,7 +271,9 @@ def check_bullet(text: str, ev: Evidence, ctx: ValidationContext,
         word = lemma.removeprefix("noun:")
         if lemma not in evidence_verbs:
             if tier > ev.max_tier:
-                severity = Severity.soft if textutil.is_ambiguous_ownership(lemma) else Severity.hard
+                ambiguous = textutil.is_ambiguous_ownership(lemma) or (
+                    lemma in config.OBJECT_SENSITIVE_VERBS and not textutil.acts_on_people(text, lemma))
+                severity = Severity.soft if ambiguous else Severity.hard
                 add("B3", severity,
                     f'uses "{word}" ({textutil.tier_name(tier)} level) but the cited facts support at most '
                     f"{textutil.tier_name(ev.max_tier)}", word)
@@ -457,8 +479,11 @@ def build_bullet(text: str, facts: list[Fact], source: Bullet | None, ai_change:
     original, kind = original_for(facts, source)
     change = classify_change(text, original, facts, source, ai_change)
     flags = [Flag(code=v.code, message=v.message) for v in soft]
+    added = [] if change == ChangeType.unchanged else new_words(
+        text, [original, *[f.text for f in facts], *([source.text] if source is not None else [])])
+    added_note = f"; new words: {', '.join(added)}" if added else ""
     if change in (ChangeType.reworded, ChangeType.combined):
-        flags.append(Flag(code="change", message=f"{change.value} from the verified source wording"))
+        flags.append(Flag(code="change", message=f"{change.value} from the verified source wording{added_note}"))
     if ctx.mode == Mode.strict and change != ChangeType.unchanged:
         flags.append(Flag(code="strict", message="strict mode: every rewrite needs my approval"))
     if any(f.id in ctx.new_fact_ids for f in facts):
@@ -469,6 +494,9 @@ def build_bullet(text: str, facts: list[Fact], source: Bullet | None, ai_change:
     pending = bool(flags) and not trusted_unchanged
     # In strict mode the verified wording stays on the resume until I approve the rewrite.
     final = original if (ctx.mode == Mode.strict and pending) else text
+    notes = list(notes or [])
+    if added and not pending:
+        notes.append(f"auto-approved minor wording change{added_note}")      # still listed in changes.md
     return TailoredBullet(
         rewritten_text=text, fact_ids=[f.id for f in facts], source_bullet_id=source.id if source else None,
         change_type=change, rationale=rationale, original_text=original, original_kind=kind,

@@ -376,3 +376,15 @@ def test_tests_never_point_at_my_real_data_files():
     for name in ("OUTPUT_DIR", "POSTINGS_DIR", "BACKUP_DIR", "APPLICATIONS_CSV", "CACHE_DIR"):
         path = getattr(config, name).resolve()
         assert config.ROOT.resolve() not in path.parents, f"{name} still points into the repo: {path}"
+
+
+def test_declining_at_the_eligibility_prompt_is_not_an_error(monkeypatch, capsys):
+    import tailor
+    from src.errors import UserAbort
+
+    def stop(args, parser):
+        raise UserAbort("Stopped at the eligibility check - nothing was tailored.")
+
+    monkeypatch.setattr(tailor, "dispatch", stop)
+    assert tailor.main(["https://example.com/job"]) == 0
+    assert "ERROR" not in capsys.readouterr().out

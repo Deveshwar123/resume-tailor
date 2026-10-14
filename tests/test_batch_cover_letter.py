@@ -111,7 +111,7 @@ def test_hard_failures_get_one_retry_then_the_sentence_is_removed(ctx):
         asked.extend(requests)
         return [SentenceFix(key=requests[0]["key"], text="I wrote SQL queries that reduced report generation time by 30%.",
                             fact_ids=["exp_acme_f02"]),
-                SentenceFix(key=requests[1]["key"], text="I managed the team's Python work.", fact_ids=["exp_acme_f01"])]
+                SentenceFix(key=requests[1]["key"], text="I supervised the team's Python work.", fact_ids=["exp_acme_f01"])]
 
     result = cover_letter.validate_letter(draft, ctx, SOURCES, retry)
     assert len(asked) == 2 and "45%" in asked[0]["problems"][0]
@@ -253,3 +253,20 @@ def test_batch_with_only_failures_returns_an_error_code(master, status, workspac
     code = loop.run_batch(Session(master=master, skills_status=status, llm=ScriptedLLM()), ["https://a.example/1"],
                           RunOptions(research=False), today=TODAY)
     assert code == 1 and not (workspace / "output" / "insights.html").exists()
+
+
+def test_an_unexpected_error_in_one_posting_does_not_stop_the_batch(master, status, workspace, monkeypatch):
+    calls = []
+
+    def flaky(url, text_path=None, *, allow_paste=True):
+        calls.append(url)
+        if url.endswith("/1"):
+            raise ValueError("something nobody anticipated")
+        raise FetchError("blocked")
+
+    monkeypatch.setattr(fetch, "get_job_text", flaky)
+    code = loop.run_batch(Session(master=master, skills_status=status, llm=ScriptedLLM()),
+                          ["https://a.example/1", "https://a.example/2"], RunOptions(research=False), today=TODAY)
+    assert code == 1 and calls == ["https://a.example/1", "https://a.example/2"]     # the second link still ran
+    log = (workspace / "output" / "batch_errors.log").read_text()
+    assert "https://a.example/1" in log and "ValueError: something nobody anticipated" in log

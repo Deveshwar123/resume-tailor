@@ -26,6 +26,7 @@ informational and never trigger a revision.
 
 from __future__ import annotations
 
+import traceback
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -301,7 +302,8 @@ def step_render(state: RunState, llm) -> None:
             template_margin_in=margin, template_font_pt=font,
         )
         state.rendered = render.render(state.resume, master, state.out_dir, state.fit.layout)
-        state.ats = ats_check.check_rendered(state.rendered.view, state.rendered.pdf, state.rendered.docx, state.analysis)
+        state.ats = ats_check.check_rendered(state.rendered.view, state.rendered.pdf, state.rendered.docx, state.analysis,
+                                             resolve_links=config.ATS_RESOLVE_LINKS)
     if len(state.fit.steps) > 1:
         ui.info(f"  page fit: {len(state.fit.steps) - 1} step(s); layout {state.fit.layout.describe(font, margin)}")
         for note in state.fit.removed:
@@ -479,6 +481,13 @@ def run_batch(session, urls: list[str], options: RunOptions, today: date | None 
         except TailorError as exc:
             ui.error(exc.message, exc.hint)
             results.append((url, None, exc.message))
+        except Exception as exc:  # a bug in one posting must not cost me the rest of the batch
+            log = config.OUTPUT_DIR / "batch_errors.log"
+            log.parent.mkdir(parents=True, exist_ok=True)
+            with log.open("a", encoding="utf-8") as handle:
+                handle.write(f"\n=== {date.today().isoformat()} {url}\n{traceback.format_exc()}")
+            ui.error(f"Unexpected error ({type(exc).__name__}: {exc}); details in {log}")
+            results.append((url, None, f"unexpected {type(exc).__name__}"))
 
     rows = []
     for number, (url, state, problem) in enumerate(results, 1):

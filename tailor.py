@@ -25,7 +25,7 @@ from pathlib import Path
 
 import config
 from src import ui
-from src.errors import TailorError
+from src.errors import TailorError, UserAbort
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -121,6 +121,9 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return dispatch(args, parser)
+    except UserAbort as exc:
+        ui.info(exc.message)
+        return 0
     except TailorError as exc:
         ui.error(exc.message, exc.hint)
         return 1

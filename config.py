@@ -128,6 +128,7 @@ ATS_CHECK_WEIGHTS = {
     "page_count": 2.0,
 }
 KEYWORD_REPEAT_LIMIT = 3
+ATS_RESOLVE_LINKS = False           # True: HEAD-request my own LinkedIn/GitHub links during the final ATS check
 EXTRACTION_MATCH_THRESHOLD = 0.97   # share of source text that must survive PDF extraction
 
 # A rewrite at least this similar to its verified source (word-level) counts as
@@ -292,6 +293,16 @@ VERB_FORM_EXCLUSIONS = {
 # Verbs whose ownership meaning depends on context ("built" solo vs. as part of
 # a team). Above-tier use is a SOFT flag (approval) rather than a hard failure.
 AMBIGUOUS_OWNERSHIP_VERBS = {"build", "create", "develop", "co-develop", "coordinate"}
+# Verbs whose ownership meaning depends on WHAT is acted on: "managed a 4-person team" is a
+# leadership claim, "managed team funds" is not. Above-tier use is a hard failure only when the
+# object is people; otherwise it goes to approval.
+OBJECT_SENSITIVE_VERBS = {"manage"}
+PEOPLE_NOUNS = {
+    "team", "staff", "people", "person", "engineer", "developer", "intern", "member", "volunteer",
+    "student", "employee", "analyst", "designer", "report", "group", "crew", "squad", "cohort",
+    "committee", "board", "peer", "tutor", "mentor", "mentee", "officer", "department", "club",
+    "organization", "chapter", "hire", "recruit", "contractor", "associate", "researcher", "teammate",
+}
 # Words that mark a helper role. If the evidence has one and the rewrite drops
 # every one of them, the bullet is flagged ("Assisted in building" -> "Built").
 DOWNGRADE_QUALIFIERS = {"assist", "help", "support", "contribute", "participate",
