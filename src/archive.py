@@ -5,6 +5,7 @@ Every run saves into its output folder:
     posting.txt                    the job posting text (the link is in archive.json)
     master_resume.snapshot.yaml    master_resume.yaml exactly as it was for this run
     resume.docx / resume.pdf       the final resume (written by render.py)
+    cover_letter.md / .docx / .pdf the cover letter, when --cover-letter was used
     <Name>_Resume.pdf              the same PDF under a filename fit to send
     tailored_resume.json           every bullet with its facts and approval state
     scores.json                    the full score breakdown and round history
@@ -99,6 +100,10 @@ def write_archive(state: RunState, tracker: UsageTracker | None = None) -> Path:
     files["eligibility"] = "eligibility.json"
     _write_json(out / "job_analysis.json", state.analysis.model_dump(mode="json"))
     files["job_analysis"] = "job_analysis.json"
+
+    if state.cover_letter is not None:
+        for key, path in state.cover_letter.files.items():
+            files[key] = path.name
 
     if tracker is not None:
         _write_json(out / "usage.json", {

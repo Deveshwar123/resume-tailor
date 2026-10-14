@@ -33,9 +33,10 @@ from typing import Callable
 
 import config
 from src import (
-    analyze, approval, archive, ats_check, eligibility, fetch, interview, judge, render, report, research,
-    revise, scoring, tailor_resume, textutil, ui,
+    analyze, approval, archive, ats_check, cover_letter, eligibility, fetch, interview, judge, render, report,
+    research, revise, scoring, tailor_resume, textutil, ui,
 )
+from src.llm import UsageTracker
 from src.errors import TailorError, UserAbort
 from src.fetch import JobText
 from src.models import (
@@ -195,6 +196,7 @@ class RunState:
     loops: list[LoopResult] = field(default_factory=list)          # every loop run (before / after the interview)
     decisions: list[approval.Decision] = field(default_factory=list)
     interview: interview.InterviewResult | None = None
+    cover_letter: cover_letter.CoverLetter | None = None
 
 
 def output_dir(analysis: JobAnalysis, run_date: date, root: Path | None = None) -> Path:
@@ -311,6 +313,22 @@ def step_render(state: RunState, llm) -> None:
         ui.warn(f"ATS check failed - {check.name}: {check.detail}")
 
 
+def step_cover_letter(state: RunState, llm) -> None:
+    """--cover-letter: same facts, same validator, same approval rules as the resume."""
+    sources = cover_letter.company_sources(state.job.text, state.brief)
+    with ui.console.status("Drafting the cover letter..."):
+        letter = cover_letter.write(llm, state.system, state.ctx, state.job.text, state.brief)
+    cover_letter.review(letter, state.ctx, sources, batch=state.options.batch)
+    with ui.console.status("Rendering the cover letter..."):
+        cover_letter.save(letter, state.ctx.master, state.out_dir, state.analysis.company, state.analysis.role, state.run_date)
+    state.cover_letter = letter
+    state.violations.extend(letter.violations)
+    removed = sum(1 for sentence in letter.sentences if not sentence.kept)
+    ui.info(f"  {letter.word_count()} words, {letter.pages} page(s); {removed} sentence(s) removed by validation or review")
+    if letter.pages > 1:
+        state.notes.append("The cover letter runs past one page; shorten it before sending.")
+
+
 def content_changed_since_loop(state: RunState, loop_text: str) -> bool:
     assert state.rendered is not None
     return state.rendered.view.plain_text(redact_contact=True) != loop_text
@@ -372,6 +390,8 @@ def run_job(session, *, url: str | None = None, text_path: Path | None = None,
     options = options or RunOptions()
     today = today or date.today()
     llm, master, status = session.llm, session.master, session.skills_status
+    tracker = getattr(llm, "tracker", None)
+    first_call = len(tracker.calls) if tracker is not None else 0
 
     ui.step("Fetching the job posting")
     job = fetch.get_job_text(url, text_path, allow_paste=not options.batch)
@@ -422,14 +442,58 @@ def run_job(session, *, url: str | None = None, text_path: Path | None = None,
     ui.step("Scoring")
     step_scores(state, llm, loop_text)
 
+    if options.cover_letter:
+        ui.step("Cover letter")
+        step_cover_letter(state, llm)
+
     ui.step("Writing reports and archiving this version")
-    tracker = getattr(llm, "tracker", None)
-    report.write_reports(state, tracker)
-    archive.write_archive(state, tracker)
+    # Usage for THIS job only (in batch mode the tracker spans every job).
+    usage = UsageTracker(calls=tracker.calls[first_call:]) if tracker is not None else None
+    report.write_reports(state, usage)
+    archive.write_archive(state, usage)
     report.append_application(state)
-    print_summary(state, tracker)
+    print_summary(state, usage)
     return state
 
 
-def run_batch(session, urls: list[str], options: RunOptions) -> int:
-    raise TailorError("Batch mode is not built yet.")
+# ---------------------------------------------------------------------------
+# Batch
+# ---------------------------------------------------------------------------
+
+
+def run_batch(session, urls: list[str], options: RunOptions, today: date | None = None) -> int:
+    """Run many postings without prompts. One failure never stops the rest.
+
+    In batch mode nothing can ask me anything: a login wall skips that link, the
+    eligibility check continues (its flags lead eligibility.md), flagged rewrites
+    revert to verified wording, and there is no interview.
+    """
+    from src import insights
+
+    options.batch, options.interview = True, False
+    results: list[tuple[str, RunState | None, str]] = []
+    for number, url in enumerate(urls, 1):
+        ui.console.rule(f"[{number}/{len(urls)}] {url}")
+        try:
+            results.append((url, run_job(session, url=url, options=options, today=today), ""))
+        except TailorError as exc:
+            ui.error(exc.message, exc.hint)
+            results.append((url, None, exc.message))
+
+    rows = []
+    for number, (url, state, problem) in enumerate(results, 1):
+        if state is None or state.final_quality is None or state.job_match is None:
+            rows.append([str(number), url[:48], "-", "-", "-", "-", f"[red]failed[/red]: {problem[:70]}"])
+            continue
+        flags = len(state.eligibility.flags())
+        rows.append([str(number), state.analysis.company, state.analysis.role, f"{state.final_quality.total:.2f}",
+                     f"{state.job_match.score:.0f}", str(flags) if flags else "-", str(state.out_dir.name)])
+    ui.console.rule("Batch summary")
+    ui.table("", ["#", "Company", "Role", "Quality", "Job Match", "Eligibility flags", "Output folder / result"], rows)
+    done = sum(1 for _url, state, _problem in results if state is not None)
+    tracker = getattr(session.llm, "tracker", None)
+    cost = f", about ${tracker.total_cost():.2f} in Claude usage" if tracker is not None and tracker.calls else ""
+    ui.info(f"{done} of {len(results)} posting(s) tailored{cost}.")
+    if done:
+        insights.generate(session.skills_status, session.master, today=today)
+    return 0 if done == len(results) else 1

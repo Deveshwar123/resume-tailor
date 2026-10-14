@@ -68,12 +68,10 @@ def run(tmp_path_factory):
         "judge": [make_judgment(7, 8, 7, 7, fixes=[REWRITE, ASK, GAP]), make_judgment(8, 8, 8, 8, fixes=[ASK, GAP]),
                   make_judgment(8, 8, 8, 7, fixes=[ASK, GAP])],
         "revise": [REVISED],
-    })
-    # Give the scripted calls some token usage so cost reporting has something to show.
-    llm.tracker.record("tailor", "claude-sonnet-5-5", SimpleNamespace(input_tokens=9000, output_tokens=1200,
+    }, usage_per_call=(1000, 100))          # every scripted call "uses" 1,000 input and 100 output tokens
+    # Usage from before this job (an earlier posting in a batch) must not be billed to it.
+    llm.tracker.record("tailor", "claude-sonnet-5-5", SimpleNamespace(input_tokens=500_000, output_tokens=50_000,
                        cache_read_input_tokens=0, cache_creation_input_tokens=0, server_tool_use=None))
-    llm.tracker.record("judge", "claude-haiku-5-5", SimpleNamespace(input_tokens=2000, output_tokens=400,
-                       cache_read_input_tokens=1500, cache_creation_input_tokens=0, server_tool_use=None))
     state = loop.run_job(Session(master=master, skills_status=status, llm=llm), text_path=posting,
                          options=RunOptions(research=False, interview=False, batch=True), today=TODAY)
     yield state, tmp_path
@@ -124,8 +122,10 @@ def test_scores_report_has_rounds_three_scores_ats_and_cost(run):
     assert "## Job Match" in text and "required skills | 100%" in text and "- Missing: AWS, machine learning" in text
     assert "## Keyword Coverage" in text and "Whole master resume" in text and "Final resume" in text
     assert "## ATS checks" in text and "| page count | pass | 1 page(s) |" in text
-    assert "## Claude usage" in text and "| tailor | 1 | 9,000 | 1,200 | $0.0300 |" in text
-    assert "| **total** | 2 | 12,500 | 1,600 | **$0.0304** |" in text
+    # 4 fast-model calls (analyze + 3 judge) and 3 write-model calls (tailor, fix, revise), this job only.
+    assert "## Claude usage" in text and "| tailor | 1 | 1,000 | 100 | $0.0030 |" in text
+    assert "| judge | 3 | 3,000 | 300 | $0.0004 |" in text
+    assert "| **total** | 7 | 7,000 | 700 | **$0.0096** |" in text
 
 
 @needs_soffice
@@ -169,7 +169,7 @@ def test_archive_snapshots_exactly_what_was_produced(run):
     scores = json.loads((out / "scores.json").read_text())
     assert len(scores["rounds"]) == 2 and scores["job_match"]["score"] == state.job_match.score
     usage = json.loads((out / "usage.json").read_text())
-    assert len(usage["calls"]) == 2 and usage["total_cost_usd"] == pytest.approx(0.0304, abs=1e-4)
+    assert len(usage["calls"]) == 7 and usage["total_cost_usd"] == pytest.approx(0.0096, abs=1e-5)
 
 
 @needs_soffice

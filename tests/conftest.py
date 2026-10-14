@@ -130,16 +130,24 @@ class ScriptedLLM:
     returned in order. A callable entry is invoked with the call's kwargs.
     """
 
-    def __init__(self, responses: dict[str, list[Any]] | None = None) -> None:
+    def __init__(self, responses: dict[str, list[Any]] | None = None,
+                 usage_per_call: tuple[int, int] | None = None) -> None:
         self.responses = {k: list(v) for k, v in (responses or {}).items()}
         self.calls: list[dict[str, Any]] = []
         self.tracker = UsageTracker()
+        self.usage_per_call = usage_per_call      # (input tokens, output tokens) recorded for every call
 
     def queue(self, purpose: str, *items: Any) -> None:
         self.responses.setdefault(purpose, []).extend(items)
 
     def _next(self, purpose: str, kwargs: dict[str, Any]) -> Any:
         self.calls.append({"purpose": purpose, **kwargs})
+        if self.usage_per_call is not None:
+            from types import SimpleNamespace
+
+            self.tracker.record(purpose, kwargs.get("model", ""), SimpleNamespace(
+                input_tokens=self.usage_per_call[0], output_tokens=self.usage_per_call[1],
+                cache_read_input_tokens=0, cache_creation_input_tokens=0, server_tool_use=None))
         queue = self.responses.get(purpose) or []
         if not queue:
             raise AssertionError(f"ScriptedLLM: no response queued for purpose {purpose!r}")
