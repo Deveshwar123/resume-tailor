@@ -14,7 +14,10 @@
         judgment = judge(draft); quality = scoring.quality(...)
         keep the best-scoring draft
 
-    approval -> render -> page-fit -> ats_check -> scores -> summary
+    if below target and the judge has questions for me (and interviews are on):
+        interview -> new facts (with my OK) -> re-tailor -> loop once more
+
+    approval checkpoint -> render -> page-fit -> ats_check -> scores -> summary
 
 Only Resume Quality drives the loop. Job Match and Keyword Coverage are
 informational and never trigger a revision.
@@ -29,7 +32,7 @@ from typing import Callable
 
 import config
 from src import (
-    analyze, approval, ats_check, eligibility, fetch, judge, render, research, revise, scoring,
+    analyze, approval, ats_check, eligibility, fetch, interview, judge, render, research, revise, scoring,
     tailor_resume, textutil, ui,
 )
 from src.errors import TailorError, UserAbort
@@ -188,6 +191,9 @@ class RunState:
     coverage_final: KeywordCoverage | None = None
     stop_note: str = ""
     notes: list[str] = field(default_factory=list)
+    loops: list[LoopResult] = field(default_factory=list)          # every loop run (before / after the interview)
+    decisions: list[approval.Decision] = field(default_factory=list)
+    interview: interview.InterviewResult | None = None
 
 
 def output_dir(analysis: JobAnalysis, run_date: date, root: Path | None = None) -> Path:
@@ -232,10 +238,49 @@ def step_loop(state: RunState, llm, first: ValidationOutcome) -> None:
 
     state.loop = run_revision_loop(first, judge_fn=judge_fn, quality_fn=quality_fn, revise_fn=revise_fn,
                                    options=state.options, on_round=_show_round)
+    state.loops.append(state.loop)
     state.resume = state.loop.best
     state.violations = list(state.loop.violations)
     state.stop_note = describe_stop(state.loop, state.options)
     ui.info(f"  {state.stop_note}")
+
+
+def step_interview(state: RunState, llm, session, today: date) -> None:
+    """Below target with open questions: ask me, add the facts I approve, re-tailor, loop once more."""
+    options = state.options
+    assert state.loop is not None
+    if (state.loop.best_quality.total >= options.target or not options.interview or options.batch
+            or not ui.is_interactive()):
+        return
+    asks = interview.questions_from(state.loop.best_judgment.fixes)
+    if not asks:
+        return
+    ui.step("Interview: the review raised questions only I can answer")
+    state.interview = interview.run_interview(llm, session.master, session.skills_status, asks, today=today)
+    if not state.interview.new_fact_ids:
+        ui.info("  no new facts were added")
+        return
+    before = state.loop
+    state.ctx = ValidationContext(master=session.master, status=session.skills_status, analysis=state.analysis,
+                                  mode=state.ctx.mode, new_fact_ids=frozenset(state.interview.new_fact_ids))
+    ui.step(f"Re-tailoring with {len(state.interview.new_fact_ids)} new fact(s), then one more loop")
+    with ui.console.status("Writing a new draft..."):
+        first, state.system = tailor_resume.tailor(llm, state.ctx, state.brief)
+    step_loop(state, llm, first)
+    if before.best_quality.total > state.loop.best_quality.total:
+        # The new draft scored lower: keep the earlier, better one.
+        state.loop, state.resume = before, before.best
+        state.violations = list(before.violations)
+        state.stop_note = describe_stop(before, options)
+        state.notes.append("The draft written after the interview scored lower, so the earlier draft was kept.")
+
+
+def step_approval(state: RunState) -> None:
+    """The human checkpoint: nothing flagged is rendered without a decision."""
+    assert state.resume is not None
+    state.decisions = approval.review(state.resume, state.ctx, batch=state.options.batch)
+    ui.info(f"  {approval.summarize(state.decisions)}")
+    approval.offer_to_save(state.ctx.master, state.decisions)
 
 
 def step_render(state: RunState, llm) -> None:
@@ -363,12 +408,12 @@ def run_job(session, *, url: str | None = None, text_path: Path | None = None,
 
     ui.step(f"Judging and revising (target {options.target:.1f}, up to {options.max_rounds} rounds)")
     step_loop(state, llm, first)
+    step_interview(state, llm, session, today)
     assert state.resume is not None
     loop_text = render.build_view(state.resume, master).plain_text(redact_contact=True)
 
-    reverted = approval.revert_pending(state.resume)
-    if reverted:
-        ui.info(f"  {reverted} flagged change(s) reverted to verified wording")
+    ui.step("Approval checkpoint")
+    step_approval(state)
 
     ui.step("Rendering")
     step_render(state, llm)
