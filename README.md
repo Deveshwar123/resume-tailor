@@ -44,6 +44,15 @@ python tailor.py --check                 # verifies the key, both model IDs, and
 Before your first real run, **review `master_resume.yaml`** (see "Writing facts" below). The header
 of that file lists what needs your confirmation.
 
+To see your fact bank on the page before adding a key (or after editing the template):
+
+```bash
+python scripts/preview.py              # no API key, no Claude: approved bullets, fitted to one page
+python scripts/preview.py job.txt      # same, ranked by a crude keyword match against a saved posting
+```
+
+The result is written to `output/_preview/resume.pdf`.
+
 ## Using it
 
 ```bash
@@ -281,7 +290,7 @@ allowlist, and extra official domains per company.
 ## Tests
 
 ```bash
-pytest          # about 315 tests, under a minute; no API key and no network needed
+pytest          # about 325 tests, under a minute; no API key and no network needed
 ```
 
 Claude is mocked everywhere. Covered: the validator (including "Assisted a team in developing a
@@ -289,7 +298,8 @@ Python application" -> "Led development of a Python application" **must fail**, 
 unverified skills, scope inflation, altered employers and dates), scoring math and synonym
 matching, eligibility (graduation year, GPA, unknowns), all four loop stop conditions, page-fit
 order, the ATS text-extraction comparison, the unlock analysis, and end-to-end runs that render
-real PDFs with LibreOffice.
+real PDFs with LibreOffice. `tests/test_schemas.py` checks that every schema sent to Claude stays
+within what structured outputs support.
 
 ## Layout
 
