@@ -32,7 +32,7 @@ The API key is read from `.env` only. `.env` and `output/` are gitignored.
 | 5 | Resume tailoring (normal + `--strict`) | done |
 | 6 | DOCX/PDF rendering, page-fit optimization, ATS checks | done |
 | 7 | Independent judge + code-computed scoring | done |
-| 8 | Iterative revision loop | |
+| 8 | Iterative revision loop | done |
 | 9 | Company research with source tiers | |
 | 10 | Interview system + human approval checkpoint | |
 | 11 | Reports, archive, application tracking, cost monitoring | |

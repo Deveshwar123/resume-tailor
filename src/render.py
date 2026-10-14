@@ -86,9 +86,14 @@ class ResumeView:
             out.extend(section.bullets)
         return [a for a in out if a.strip()]
 
-    def plain_text(self) -> str:
-        """The resume as plain text (what the judge reads and keywords are counted in)."""
-        lines = [self.name, self.contact_line, ""]
+    def plain_text(self, redact_contact: bool = False) -> str:
+        """The resume as plain text (what the judge reads and keywords are counted in).
+
+        `redact_contact=True` replaces my name, phone, and email with placeholders;
+        the judge scores the writing and has no use for them.
+        """
+        lines = (["[NAME]", "[location | phone | email | LinkedIn]", ""] if redact_contact
+                 else [self.name, self.contact_line, ""])
         for section in self.sections:
             lines.append(section.heading)
             for entry in section.entries:

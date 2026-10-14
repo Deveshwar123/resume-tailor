@@ -757,7 +757,9 @@ class TailoredResume(BaseModel):
                 end=source.dates.end if source else "",
                 bullets=[
                     BulletDraft(
-                        rewritten_text=b.text,
+                        # A proposal still waiting for approval is shown as proposed, so it
+                        # survives a revision round (in strict mode `text` is the original).
+                        rewritten_text=b.rewritten_text if b.approval == Approval.pending else b.text,
                         fact_ids=list(b.fact_ids),
                         source_bullet_id=b.source_bullet_id,
                         change_type=b.change_type,
