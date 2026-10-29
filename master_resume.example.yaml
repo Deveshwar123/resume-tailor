@@ -1,0 +1,199 @@
+# =============================================================================
+# MASTER RESUME - the verified fact bank. This file is the ONLY source of truth.
+# The tool may select, reorder, reword, and emphasize what is here. It can
+# never add an employer, title, date, number, skill, or level of ownership
+# that this file does not support.
+#
+# How to write entries (full guide: README.md, "Writing facts"):
+#   * facts    - atomic, true statements. One claim each. Give every fact an id.
+#   * metrics  - the exact number strings allowed in output ("20+", "4-person").
+#   * skills   - every skill the fact genuinely evidences (must be "verified"
+#                in skills_status.yaml to appear on a resume).
+#   * ownership (role or fact) - the HIGHEST TRUE level:
+#                member < contributor < lead < founder / owner
+#   * bullets  - optional phrasings. approved: true means "I signed this off";
+#                approved bullets are used verbatim in --strict mode.
+#   * section  - optional: experience | leadership. Where the role is listed.
+#                Defaults from `type` (jobs, internships, research, programs ->
+#                EXPERIENCE; leadership, clubs, volunteering -> LEADERSHIP).
+#
+# This is a FICTIONAL example (Jordan Lee is not a real person). Copy it to
+# master_resume.yaml and replace everything with your own facts:
+#     cp master_resume.example.yaml master_resume.yaml
+# master_resume.yaml is gitignored so your personal data never gets committed.
+#
+# Comments below this header are not preserved when the tool rewrites the file
+# (interview answers, saved approvals). A timestamped backup is always made in
+# data/backups/ first.
+# =============================================================================
+
+contact:
+  name: Jordan Lee
+  email: jordan.lee@example.com
+  phone: (555) 010-0100
+  location: Austin, TX
+  linkedin: linkedin.com/in/jordanlee-example
+  github: github.com/jordanlee-example
+education:
+- id: edu_state
+  school: State University
+  degree: B.S. Computer Science
+  major: Computer Science
+  location: Austin, TX
+  grad: May 2028
+  class_year: 2028
+  gpa: 3.6
+  honors:
+  - Dean's List
+  coursework:
+  - Data Structures
+  - Databases
+work_authorization: US citizen
+experience:
+- id: exp_acme
+  title: Software Engineering Intern
+  org: Acme Corp
+  location: Austin, TX
+  dates:
+    start: 2025-06
+    end: 2025-08
+  type: internship
+  ownership: contributor
+  tags:
+  - software
+  - data
+  skills:
+  - Python
+  - SQL
+  facts:
+  - id: exp_acme_f01
+    kind: responsibility
+    text: Assisted a 4-person team in developing a Python application
+    ownership: contributor
+    metrics:
+    - 4-person
+    skills:
+    - Python
+  - id: exp_acme_f02
+    kind: achievement
+    text: Wrote SQL queries that reduced report generation time by 30%
+    metrics:
+    - 30%
+    skills:
+    - SQL
+  - id: exp_acme_f03
+    kind: tool_use
+    text: Tested REST API endpoints with pytest
+    skills:
+    - pytest
+    - REST
+  bullets:
+  - id: exp_acme_b01
+    text: Assisted a 4-person team in developing a Python application.
+    fact_ids:
+    - exp_acme_f01
+    approved: true
+  - id: exp_acme_b02
+    text: Wrote SQL queries that reduced report generation time by 30%.
+    fact_ids:
+    - exp_acme_f02
+    approved: true
+- id: exp_club
+  title: Vice President
+  org: Data Club
+  location: ''
+  dates:
+    start: 2024-09
+    end: present
+  type: club
+  ownership: lead
+  tags:
+  - leadership
+  - data
+  skills:
+  - data analysis
+  facts:
+  - id: exp_club_f01
+    kind: responsibility
+    text: Led weekly workshops for 25 members on data analysis
+    ownership: lead
+    metrics:
+    - '25'
+    skills:
+    - data analysis
+  - id: exp_club_f02
+    kind: achievement
+    text: Organized a campus hackathon with 60+ participants
+    metrics:
+    - 60+
+  bullets: []
+- id: exp_lab
+  title: Research Assistant
+  org: Vision Lab
+  location: Austin, TX
+  dates:
+    start: 2024-01
+    end: 2024-05
+  type: research
+  ownership: member
+  tags:
+  - research
+  skills: []
+  facts:
+  - id: exp_lab_f01
+    kind: responsibility
+    text: Participated in weekly lab meetings and annotated 500 images
+    ownership: member
+    metrics:
+    - '500'
+  bullets: []
+projects:
+- id: proj_tracker
+  name: Budget Tracker
+  role: ''
+  link: https://github.com/jordanlee-example/budget
+  dates:
+    start: 2025-01
+    end: 2025-03
+  ownership: owner
+  tags:
+  - software
+  - web
+  skills:
+  - JavaScript
+  - React
+  facts:
+  - id: proj_tracker_f01
+    kind: tool_use
+    text: Built a budget tracking web app with JavaScript and React
+    ownership: owner
+    skills:
+    - JavaScript
+    - React
+  - id: proj_tracker_f02
+    kind: metric
+    text: Deployed the app for 40 student users
+    metrics:
+    - '40'
+  bullets:
+  - id: proj_tracker_b01
+    text: Built a budget tracking web app with JavaScript and React.
+    fact_ids:
+    - proj_tracker_f01
+    approved: true
+skills:
+  languages:
+  - Python
+  - SQL
+  - JavaScript
+  tools:
+  - React
+  - pytest
+  - Git
+  concepts:
+  - data analysis
+  - REST
+certifications: []
+awards:
+- id: award_hack
+  text: Campus Hackathon winner, 2025.

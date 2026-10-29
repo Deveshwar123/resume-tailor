@@ -1,0 +1,32 @@
+# =============================================================================
+# SKILLS STATUS - my honest status for each skill.
+#
+#   verified : I can back it up. ONLY these may appear on a tailored resume.
+#   learning : I am working on it. Never appears on a resume; counts as partial
+#              credit in Job Match and shows as "Learning" on the dashboard.
+#   missing  : I do not have it. A skill that is not listed anywhere is
+#              treated as missing.
+#
+# All three statuses feed `python tailor.py --insights`, which ranks the skills
+# that would unlock the most postings.
+#
+# FICTIONAL example. Copy it to skills_status.yaml (gitignored) and edit:
+#     cp skills_status.example.yaml skills_status.yaml
+# Add skills postings keep asking for under `missing` or `learning` as you go.
+# =============================================================================
+
+verified:
+- Python
+- SQL
+- JavaScript
+- React
+- pytest
+- Git
+- data analysis
+- REST
+learning:
+- PyTorch
+- Docker
+missing:
+- AWS
+- Tableau

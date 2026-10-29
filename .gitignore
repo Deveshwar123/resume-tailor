@@ -19,3 +19,10 @@ __pycache__/
 .idea/
 .vscode/
 ~$*.docx
+
+# Personal data - the real fact bank, skill statuses, and application log stay local.
+# The repo ships fictional *.example.yaml versions instead.
+master_resume.yaml
+skills_status.yaml
+data/applications.csv
+data/postings/*.json

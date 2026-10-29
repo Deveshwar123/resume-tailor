@@ -22,6 +22,13 @@ link -> fetch -> analyze -> eligibility -> research -> tailor -> validate
      -> interview (optional) -> approval -> render + page fit -> ATS check -> reports + archive
 ```
 
+**Stack:** Python 3.11+ · Claude through the Anthropic SDK (structured outputs, web search), Claude Code,
+or a local Ollama model · Pydantic schemas · docxtpl + LibreOffice for DOCX/PDF · pypdf for ATS checks ·
+352 pytest tests that run offline
+
+<p align="center"><img src="docs/sample-resume.png" width="70%" alt="Sample one-page resume rendered by the tool from the fictional example fact bank"></p>
+<p align="center"><sub>A page rendered from the fictional example fact bank by <code>scripts/preview.py</code> (no API key needed). ATS checks: 10/10.</sub></p>
+
 ## Setup
 
 Needs Python 3.11+ and LibreOffice (for PDF conversion).
@@ -32,10 +39,14 @@ python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 brew install --cask libreoffice          # macOS; on Linux: apt install libreoffice
 cp .env.example .env                     # then put your Anthropic API key in .env
+cp master_resume.example.yaml master_resume.yaml   # then replace the example with your own facts
+cp skills_status.example.yaml skills_status.yaml
 python tailor.py --check                 # verifies the key, both model IDs, and your data files
 ```
 
-- The API key is read from `.env` **only**. `.env` and `output/` are gitignored. No API credits? See
+- The API key is read from `.env` **only**. `.env`, `output/`, and your personal data
+  (`master_resume.yaml`, `skills_status.yaml`, `data/applications.csv`, saved postings) are gitignored.
+  The repo ships fictional `*.example.yaml` versions instead. No API credits? See
   "Running without API credits" below.
 - `--check` asks the API whether the two configured models exist. If one does not, it prints the
   model IDs your key can use and stops. Change models in `config.py` or with `FAST_MODEL=` /
@@ -56,8 +67,8 @@ For one run only: `LLM_BACKEND=ollama python tailor.py <job_url>` (a variable se
 Set `OLLAMA_MODEL` (and optionally a smaller `OLLAMA_FAST_MODEL` for the analysis and judge steps) to
 use a different local model.
 
-Before your first real run, **review `master_resume.yaml`** (see "Writing facts" below). The header
-of that file lists what needs your confirmation.
+Before your first real run, **replace the example facts in `master_resume.yaml` with your own** (see
+"Writing facts" below).
 
 To see your fact bank on the page before adding a key (or after editing the template):
 
@@ -305,7 +316,7 @@ allowlist, and extra official domains per company.
 ## Tests
 
 ```bash
-pytest          # about 325 tests, under a minute; no API key and no network needed
+pytest          # 352 tests, about a minute; no API key and no network needed
 ```
 
 Claude is mocked everywhere. Covered: the validator (including "Assisted a team in developing a
@@ -321,8 +332,8 @@ within what structured outputs support.
 ```
 tailor.py               CLI entry point
 config.py               models, thresholds, weights, lexicons, paths
-master_resume.yaml      verified fact bank (the source of truth)
-skills_status.yaml      verified / learning / missing
+master_resume.example.yaml   fictional fact bank; copy to master_resume.yaml (gitignored), the source of truth
+skills_status.example.yaml   verified / learning / missing; copy to skills_status.yaml (gitignored)
 template.docx           ATS-safe resume design
 SPEC.md                 the original build spec
 src/
@@ -347,8 +358,9 @@ src/
   cover_letter.py       --cover-letter
   loop.py               orchestrator, batch
   models.py store.py textutil.py relevance.py ui.py errors.py
-data/postings/          every analyzed posting (JSON)
-data/applications.csv   one row per run
+data/postings/          every analyzed posting (JSON, gitignored)
+data/applications.csv   one row per run (gitignored)
+docs/                   sample output for this README
 output/                 results (gitignored)
 ```
 
@@ -375,8 +387,14 @@ approval or page fitting changed the text after the loop.
 | 11 | Reports, archive, application tracking, cost monitoring | done |
 | 12 | Application intelligence dashboard | done |
 | 13 | Batch processing + optional cover letter | done |
-Every Claude call is exercised by tests with scripted responses. The live API has not been called
-yet from this checkout: `python tailor.py --check` is the first thing to run once `.env` has a key.
+
+Every Claude call is exercised by tests with scripted responses. Full live runs work through the
+Claude Code backend and take about 4 minutes each.
+
+**Known limitation.** In normal mode the tailor step tends to return approved bullets word for word,
+so a run mostly *selects and orders* verified bullets rather than rewording them. The revise step
+does reword a few bullets, but the judge's whole-number category scores rarely move, so the plateau
+rule ends the loop after two rounds.
 
 ## Troubleshooting
 
