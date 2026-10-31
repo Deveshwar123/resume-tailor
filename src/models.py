@@ -817,6 +817,21 @@ class BulletFixBatch(BaseModel):
     fixes: list[BulletFix]
 
 
+class RewordCandidate(BaseModel):
+    """One tailored rewrite of a bullet that came back word for word (see tailor_resume.reword_verbatim)."""
+
+    key: str                         # "<entry_id>#<bullet_index>", as sent
+    rewritten_text: str
+    posting_terms: list[str]         # the posting's words the rewrite uses
+    reason: str                      # what the rewrite does for this posting
+
+
+class RewordBatch(BaseModel):
+    """Wire model: one rewrite candidate per verbatim bullet."""
+
+    rewrites: list[RewordCandidate]
+
+
 # ---------------------------------------------------------------------------
 # Judging and scoring
 # ---------------------------------------------------------------------------

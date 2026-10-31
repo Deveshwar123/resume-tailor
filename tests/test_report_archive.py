@@ -125,7 +125,7 @@ def test_scores_report_has_rounds_three_scores_ats_and_cost(run):
     # 4 fast-model calls (analyze + 3 judge) and 3 write-model calls (tailor, fix, revise), this job only.
     assert "## Claude usage" in text and "| tailor | 1 | 1,000 | 100 | $0.0030 |" in text
     assert "| judge | 3 | 3,000 | 300 | $0.0004 |" in text
-    assert "| **total** | 7 | 7,000 | 700 | **$0.0096** |" in text
+    assert "| **total** | 8 | 8,000 | 800 | **$0.0126** |" in text                # includes the rewording pass
 
 
 @needs_soffice
@@ -169,7 +169,7 @@ def test_archive_snapshots_exactly_what_was_produced(run):
     scores = json.loads((out / "scores.json").read_text())
     assert len(scores["rounds"]) == 2 and scores["job_match"]["score"] == state.job_match.score
     usage = json.loads((out / "usage.json").read_text())
-    assert len(usage["calls"]) == 7 and usage["total_cost_usd"] == pytest.approx(0.0096, abs=1e-5)
+    assert len(usage["calls"]) == 8 and usage["total_cost_usd"] == pytest.approx(0.0126, abs=1e-5)   # with the rewording pass
 
 
 @needs_soffice

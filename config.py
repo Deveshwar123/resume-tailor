@@ -57,6 +57,7 @@ EFFORT = {
     "interpret": "low",
     "judge": "high",        # strict instruction following matters most here
     "tailor": "medium",
+    "reword": "medium",     # second pass for bullets the tailor returned word for word
     "revise": "medium",
     "fix": "low",           # single-bullet repair after a validation failure
     "tighten": "low",       # page-fit wording tightening
@@ -175,6 +176,9 @@ FONT_STEP_PT = 0.5
 SPACING_STEP = 0.2
 BODY_FONT = "Times New Roman"
 TARGET_BULLETS = 15             # bullet budget suggested to the tailor for one page
+# Normal mode: when more than this share of the first draft's bullets is still word for word
+# an approved bullet or a fact, one extra call rewrites those bullets for the posting.
+REWORD_MIN_VERBATIM_SHARE = 0.25
 MAX_BULLETS_PER_ENTRY = 3
 MIN_BULLETS_PER_ENTRY = 1
 REPLACEMENT_MAX_BULLETS = 2     # bullets used when validate.py swaps in a verified entry

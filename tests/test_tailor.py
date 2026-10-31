@@ -79,7 +79,9 @@ def test_tailor_uses_the_write_model_and_validates_the_draft(ctx):
     assert call["model"] == config.WRITE_MODEL and call["schema"].__name__ == "TailoredResumeDraft"
     assert call["system"] == system
     assert outcome.resume.skills == ["Python", "SQL"]            # Kubernetes is not mine to list
-    assert llm.purposes() == ["tailor"]                          # nothing failed hard, so no retry call
+    # Nothing failed hard, so no retry call. One of the two bullets is verbatim (over the 25% share),
+    # so the rewording pass runs once; the scripted pass finds nothing better.
+    assert llm.purposes() == ["tailor", "reword"]
 
 
 def test_inflated_bullet_triggers_one_fix_call_with_the_violation(ctx):
@@ -139,3 +141,82 @@ def test_baseline_is_verified_wording_ranked_by_relevance(ctx):
     # Acme (Python and SQL, the required skills) is the most relevant entry for this posting.
     assert draft.experiences[0].source_id == "exp_acme"
     assert draft.skills[:2] == ["Python", "SQL"]
+
+
+# ---------------------------------------------------------------------------
+# Tailoring rewrites: the prompt asks for it, and verbatim drafts get a second pass
+# ---------------------------------------------------------------------------
+
+VERBATIM = make_draft(
+    experiences=[ed("exp_acme", [bd(ASSISTED, ["exp_acme_f01"], "exp_acme_b01", "unchanged"),
+                                 bd("Wrote SQL queries that reduced report generation time by 30%.", ["exp_acme_f02"],
+                                    "exp_acme_b02", "unchanged")])],
+    projects=[ed("proj_tracker", [bd("Built a budget tracking web app with JavaScript and React.", ["proj_tracker_f01"],
+                                     "proj_tracker_b01", "unchanged")])],
+    skills=["Python", "SQL"],
+)
+
+
+def reword(*items):
+    from src.models import RewordBatch
+
+    return RewordBatch.model_validate({"rewrites": [
+        {"key": k, "rewritten_text": t, "posting_terms": [], "reason": "fits the posting"} for k, t in items]})
+
+
+def test_normal_mode_asks_for_a_rewrite_per_bullet_and_names_the_claim_words(ctx):
+    system = tailor_resume.build_system(ctx)
+    assert "A draft that repeats them word for word is not tailored" in system
+    assert "Expect to rewrite most bullets" in system and "good starting points" not in system
+    # The words the validator flags are spelled out, so rewrites avoid them instead of being reverted.
+    assert "company-wide" in system and "scalable" in system and "resulting in" in system
+
+
+def test_verbatim_bullets_get_one_reword_pass_judged_by_the_validator_and_the_posting(ctx):
+    llm = ScriptedLLM({"tailor": [VERBATIM], "reword": [reword(
+        ("exp_acme#0", "Led a 4-person team developing a Python application."),           # ownership inflated: hard
+        ("exp_acme#1", "Wrote queries that reduced report generation time by 30%."),       # drops SQL: less posting language
+        ("proj_tracker#0", "Built a JavaScript and React web app for budget tracking."),   # passes
+        ("exp_zzz#9", "Built a rocket."),                                                  # not a bullet that was sent
+    )]})
+    outcome, system = tailor_resume.tailor(llm, ctx)
+    call = llm.calls[1]
+    assert llm.purposes() == ["tailor", "reword"] and call["system"] == system and call["model"] == config.WRITE_MODEL
+    assert '"key": "exp_acme#0"' in call["user"] and '"ownership": "contributor"' in call["user"]
+    acme, tracker = outcome.resume.experiences[0], outcome.resume.projects[0]
+    assert [b.text for b in acme.bullets] == [ASSISTED, "Wrote SQL queries that reduced report generation time by 30%."]
+    assert "used less of the posting's language" in acme.bullets[1].history[-1]
+    kept = tracker.bullets[0]
+    assert kept.rewritten_text == "Built a JavaScript and React web app for budget tracking."
+    assert kept.change_type == ChangeType.reworded and kept.original_text.startswith("Built a budget tracking")
+    assert kept.approval == Approval.pending and [f.code for f in kept.flags] == ["change"]   # approval still applies
+    assert outcome.reworded == 1
+    rejected = [v for v in outcome.violations if v.resolution.startswith("reword candidate rejected")]
+    assert [v.code for v in rejected] == ["B3"]
+    assert "3 bullets, 1 reworded (1 in the second pass)" in tailor_resume.summarize(outcome)
+
+
+def test_no_reword_pass_when_the_draft_is_already_tailored(ctx):
+    tailored = make_draft(experiences=[ed("exp_acme", [
+        bd("Assisted a 4-person team in building a Python application for data work", ["exp_acme_f01"], "exp_acme_b01"),
+        bd("Wrote SQL queries that cut report generation time by 30%", ["exp_acme_f02"], "exp_acme_b02", "minor_wording"),
+        bd("Tested REST API endpoints in Python with pytest", ["exp_acme_f03", "exp_acme_f01"])])])
+    llm = ScriptedLLM({"tailor": [tailored]})
+    tailor_resume.tailor(llm, ctx)
+    assert llm.purposes() == ["tailor"]
+
+
+def test_strict_mode_never_runs_the_reword_pass(master, status, analysis):
+    ctx = ValidationContext(master=master, status=status, analysis=analysis, mode=Mode.strict)
+    llm = ScriptedLLM({"tailor": [VERBATIM]})
+    tailor_resume.tailor(llm, ctx)
+    assert llm.purposes() == ["tailor"]
+
+
+def test_a_failed_reword_call_keeps_the_verified_wording(ctx):
+    def boom(_kwargs):
+        raise LLMError("overloaded")
+
+    llm = ScriptedLLM({"tailor": [VERBATIM], "reword": [boom]})
+    outcome, _ = tailor_resume.tailor(llm, ctx)
+    assert outcome.reworded == 0 and outcome.resume.experiences[0].bullets[0].text == ASSISTED

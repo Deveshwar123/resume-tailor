@@ -316,7 +316,7 @@ def test_batch_runs_every_link_without_prompts(master, status, workspace, monkey
     assert "reverted (automatic)" in (acme / "changes.md").read_text()
     # Each job reports only its own Claude usage.
     assert len(json.loads((acme / "usage.json").read_text())["calls"]) == 4       # analyze, tailor, judge x2
-    assert len(json.loads((globex / "usage.json").read_text())["calls"]) == 3     # analyze, tailor, judge
+    assert len(json.loads((globex / "usage.json").read_text())["calls"]) == 4     # analyze, tailor, reword, judge
     # The dashboard is refreshed at the end.
     assert (workspace / "output" / "insights.html").exists()
     assert "2 analyzed posting(s)" in (workspace / "output" / "insights.md").read_text()

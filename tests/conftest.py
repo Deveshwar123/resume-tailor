@@ -128,7 +128,13 @@ class ScriptedLLM:
 
     `responses` maps a purpose ("tailor", "judge", ...) to a list of objects
     returned in order. A callable entry is invoked with the call's kwargs.
+
+    `DEFAULTS` answers purposes a test did not script: the rewording pass
+    (tailor_resume.reword_verbatim) runs whenever a scripted draft is mostly
+    verbatim, and by default it finds no better wording.
     """
+
+    DEFAULTS: dict[str, Any] = {"reword": {"rewrites": []}}
 
     def __init__(self, responses: dict[str, list[Any]] | None = None,
                  usage_per_call: tuple[int, int] | None = None) -> None:
@@ -149,6 +155,8 @@ class ScriptedLLM:
                 input_tokens=self.usage_per_call[0], output_tokens=self.usage_per_call[1],
                 cache_read_input_tokens=0, cache_creation_input_tokens=0, server_tool_use=None))
         queue = self.responses.get(purpose) or []
+        if not queue and purpose in self.DEFAULTS:
+            return self.DEFAULTS[purpose]
         if not queue:
             raise AssertionError(f"ScriptedLLM: no response queued for purpose {purpose!r}")
         item = queue.pop(0) if len(queue) > 1 or not getattr(self, "repeat_last", False) else queue[0]

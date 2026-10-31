@@ -300,7 +300,7 @@ def test_interview_then_retailor_then_approval(master, status, files, tmp_path, 
     answers("", ANSWER, "a", "", "a", "")
     state = loop.run_job(Session(master=master, skills_status=status, llm=llm), text_path=posting,
                          options=RunOptions(research=False), today=TODAY)
-    assert llm.purposes() == ["analyze", "tailor", "judge", "interview", "tailor", "judge"]
+    assert llm.purposes() == ["analyze", "tailor", "reword", "judge", "interview", "tailor", "reword", "judge"]
     assert state.interview.new_fact_ids == ["exp_acme_f04"] and len(state.loops) == 2
     assert state.ctx.new_fact_ids == frozenset({"exp_acme_f04"})
     second_prompt = [c for c in llm.calls if c["purpose"] == "tailor"][1]["system"]

@@ -551,6 +551,7 @@ class ValidationOutcome:
     resume: TailoredResume
     violations: list[Violation] = field(default_factory=list)
     retried: int = 0
+    reworded: int = 0                # rewrites kept by tailor_resume.reword_verbatim()
 
     def hard(self) -> list[Violation]:
         return [v for v in self.violations if v.severity == Severity.hard]

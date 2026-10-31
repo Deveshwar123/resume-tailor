@@ -6,8 +6,18 @@ its cited facts, sends hard violations back for one retry (`make_retry_fn`),
 and reverts or drops whatever still fails.
 
 The system prompt built here (rules + fact bank + job + company brief) is
-shared by the tailor, revise, fix, and tighten calls. It is identical across a
-run, so it is cached and later calls read it at a fraction of the cost.
+shared by the tailor, reword, revise, fix, and tighten calls. It is identical
+across a run, so it is cached and later calls read it at a fraction of the cost.
+
+Why tailoring is pushed so hard toward rewording: in live runs the tailor
+returned the approved bullets word for word (10 of 10, 9 of 9, 6 of 7), which
+made "tailoring" only a choice and order of bullets. The approved bullets are
+the candidate's general-purpose wording, so the normal-mode rules now ask for a
+rewrite per bullet and name the words the checker treats as new claims. If the
+draft still comes back mostly verbatim, `reword_verbatim()` asks once more, for
+those bullets only, with one candidate and a reason each; a candidate is kept
+only if it passes the validator with no hard violation and uses at least as
+much of the posting's language as the wording it replaces.
 """
 
 from __future__ import annotations
@@ -15,7 +25,7 @@ from __future__ import annotations
 import json
 
 import config
-from src import ui, validate
+from src import scoring, textutil, ui, validate
 from src.errors import LLMError
 from src.models import (
     BulletDraft,
@@ -23,6 +33,8 @@ from src.models import (
     BulletFixBatch,
     BulletFixRequest,
     ChangeType,
+    RewordBatch,
+    Severity,
     CompanyBrief,
     EntryDraft,
     MasterResume,
@@ -47,6 +59,10 @@ Writing each bullet
 - Scope: do not add words that enlarge the work ("company-wide", "end-to-end", "large-scale", "production", "multiple", "all") unless the cited fact uses them.
 - Mirror the posting's language only where it is true of the fact. Prefer strong, accurate verbs over inflated ones.
 - Style: start with a verb, no first person, one sentence, at most about 200 characters, ending with a period. Use past tense for roles that have ended and present tense for current ones.
+- Words the checker treats as new claims unless a cited fact already uses them (a bullet that adds one goes to the candidate for approval, and reverts to the original when no one can approve it):
+  - scope: {scope_words}
+  - technical complexity: {complexity_words}
+  - results (any form): {result_words}
 
 Choosing content
 - Pick the experiences, projects, and facts that best fit this job type: technical work for software roles, analytical and business work for finance roles, methodology and rigor for research roles, data handling and analysis for data roles.
@@ -66,7 +82,11 @@ Filling the output
 {mode_rules}"""
 
 NORMAL_RULES = """
-Mode: normal. Reword freely within the rules above. Approved bullets are good starting points; improve them for this job where the facts allow."""
+Mode: normal. Tailoring the wording is the main job.
+- The approved bullets are the candidate's general-purpose wording. They show what is true; they are not written for this posting. A draft that repeats them word for word is not tailored.
+- For every bullet, start from its cited facts (and the approved bullet, if any) and rewrite it for this posting: lead with the part this role cares about most (its `responsibilities`, `key_phrases`, and `required_skills`), use the posting's own words for what the facts already show, and cut what this role does not need. If a word would add a claim, drop that word, not the rewrite.
+- Keep an approved bullet or a fact word for word only when it already leads with what this role values, in the posting's language, and say so in `rationale`. Expect to rewrite most bullets.
+- `rationale`: name the posting's need the bullet now speaks to."""
 
 STRICT_RULES = """
 Mode: STRICT. The candidate wants their own approved wording.
@@ -75,6 +95,17 @@ Mode: STRICT. The candidate wants their own approved wording.
 - You may propose a rewrite of a bullet only when it would clearly help for this job. Put the proposal in `rewritten_text`, keep `source_bullet_id` pointing at the original, and explain it in `rationale`. The original stays on the resume unless the candidate approves your proposal, so propose sparingly."""
 
 TAILOR_USER = "Write the tailored resume draft for this job."
+
+REWORD_USER = """These bullets are still word for word the candidate's general-purpose wording. Rewrite each one for this posting.
+
+- Lead with what this role cares about most (`responsibilities`, `key_phrases`, `required_skills` in <job>), and use the posting's own words for what the cited facts already show. List those words in `posting_terms`.
+- State only what the cited facts support: the same numbers written the same way, only skills and tools the facts name, ownership verbs at or below each fact's level, and keep helper wording such as "assisted" or "helped" when a fact has it.
+- Avoid the words listed under "Words the checker treats as new claims" unless a cited fact uses them.
+- One sentence, starting with a verb, ending with a period, at most about 200 characters.
+- `reason`: one short sentence on what the rewrite does for this posting.
+- Keep each `key`. If no truthful rewrite would serve this posting better, return the current text and say why in `reason`.
+
+{items}"""
 
 FIX_USER = """These bullets failed validation against the fact bank. Rewrite each one so that it states only what its cited facts support and no longer has the problem listed. If a problem cannot be fixed by rewording, return the fact's own wording. Keep each `key` unchanged and cite only facts of that bullet's own entry.
 
@@ -167,6 +198,9 @@ def build_system(ctx: ValidationContext, brief: CompanyBrief | None = None) -> s
         target_bullets=config.TARGET_BULLETS,
         max_per_entry=config.MAX_BULLETS_PER_ENTRY,
         mode_rules=STRICT_RULES if ctx.mode == Mode.strict else NORMAL_RULES,
+        scope_words=", ".join(config.SCOPE_WORDS),
+        complexity_words=", ".join(config.COMPLEXITY_WORDS),
+        result_words=", ".join(config.RESULT_WORDS + config.RESULT_PHRASES),
     )
     parts = [
         rules,
@@ -210,6 +244,90 @@ def make_retry_fn(llm, system: str, ctx: ValidationContext) -> validate.RetryFn:
         return batch.fixes
 
     return retry
+
+
+# ---------------------------------------------------------------------------
+# Second pass: bullets that came back word for word
+# ---------------------------------------------------------------------------
+
+
+def verbatim_share(outcome: ValidationOutcome) -> tuple[int, int]:
+    """(bullets that are word for word an approved bullet or a fact, all bullets)."""
+    bullets = [b for _e, _i, b in outcome.resume.bullets()]
+    return sum(1 for b in bullets if b.change_type == ChangeType.unchanged), len(bullets)
+
+
+def reword_verbatim(llm, system: str, ctx: ValidationContext, outcome: ValidationOutcome) -> int:
+    """Rewrite the verbatim bullets once more for this posting. Returns how many rewrites were kept.
+
+    Runs only in normal mode and only when more than REWORD_MIN_VERBATIM_SHARE
+    of the bullets are verbatim. Each candidate is judged in code before it may
+    replace the verified wording:
+      * `validate.check_bullet` must find no hard violation (a soft flag sends the
+        rewrite to approval, exactly like a rewrite from the first call);
+      * it must use at least as much of the posting's language
+        (`scoring.posting_overlap`) as the wording it replaces.
+    Anything else keeps the verified wording, so this pass can only add
+    rewrites that the validator accepts. Mutates `outcome` in place.
+    """
+    if ctx.mode != Mode.normal:
+        return 0
+    verbatim, total = verbatim_share(outcome)
+    if not total or verbatim / total <= config.REWORD_MIN_VERBATIM_SHARE:
+        return 0
+    targets = {f"{entry.source_id}#{index}": (entry, index, bullet) for entry, index, bullet in outcome.resume.bullets()
+               if bullet.change_type == ChangeType.unchanged}
+    payload = []
+    for key, (entry, _index, bullet) in targets.items():
+        facts = [ctx.facts[fid][1] for fid in bullet.fact_ids if fid in ctx.facts]
+        payload.append({"key": key, "entry": entry.source_id, "current_text": bullet.text,
+                        "cited_facts": [{"id": f.id, "text": f.text, "metrics": f.metrics, "skills": f.skills,
+                                         "ownership": ctx.master.effective_ownership(ctx.master.entry(entry.source_id), f).value}
+                                        for f in facts]})
+    try:
+        batch = llm.parse(purpose="reword", model=config.WRITE_MODEL, system=system,
+                          user=REWORD_USER.format(items=json.dumps(payload, indent=1, ensure_ascii=False)),
+                          schema=RewordBatch)
+    except LLMError as exc:
+        ui.warn(f"The rewording pass could not run ({exc.message}); keeping the verified wording.")
+        return 0
+    kept = 0
+    for candidate in batch.rewrites:
+        target = targets.get(candidate.key)
+        if target is None:
+            continue
+        entry, index, bullet = target
+        new_text = textutil.plain(candidate.rewritten_text)
+        if not new_text or textutil.same_text(new_text, bullet.text):
+            continue
+        if any(textutil.same_text(new_text, other.text) for other in entry.bullets if other is not bullet):
+            continue
+        source_entry = ctx.master.entry(entry.source_id)
+        facts = [ctx.facts[fid][1] for fid in bullet.fact_ids if fid in ctx.facts]
+        source = ctx.bullets[bullet.source_bullet_id][1] if bullet.source_bullet_id in ctx.bullets else None
+        if source_entry is None or not facts:
+            continue
+        found = validate.check_bullet(new_text, validate.gather_evidence(source_entry, facts, source), ctx,
+                                      entry.source_id, index)
+        hard = [v for v in found if v.severity == Severity.hard]
+        if hard:
+            for v in hard:
+                v.resolution = "reword candidate rejected; the verified wording was kept"
+            outcome.violations.extend(hard)
+            continue
+        if scoring.posting_overlap(ctx.analysis, new_text) < scoring.posting_overlap(ctx.analysis, bullet.text):
+            bullet.history.append(f'a reword candidate used less of the posting\'s language and was not kept: "{new_text}"')
+            continue
+        soft = [v for v in found if v.severity == Severity.soft]
+        rebuilt = validate.build_bullet(new_text, facts, source, ChangeType.reworded, candidate.reason, soft, ctx,
+                                        [*bullet.history, "reworded for this posting in the second pass"])
+        if rebuilt.approval.value == "pending":
+            for v in soft:
+                v.resolution = "sent to approval"
+            outcome.violations.extend(soft)
+        entry.bullets[index] = rebuilt
+        kept += 1
+    return kept
 
 
 # ---------------------------------------------------------------------------
@@ -271,6 +389,7 @@ def tailor(llm, ctx: ValidationContext, brief: CompanyBrief | None = None) -> tu
         ui.warn("Claude selected no experiences; starting from the verified baseline instead.")
         draft = baseline_draft(ctx)
     outcome = validate.enforce(draft, ctx, retry_fn=make_retry_fn(llm, system, ctx))
+    outcome.reworded = reword_verbatim(llm, system, ctx, outcome)
     return outcome, system
 
 
@@ -278,5 +397,7 @@ def summarize(outcome: ValidationOutcome) -> str:
     """One-line description of a validation pass for the progress display."""
     bullets = sum(len(e.bullets) for e in outcome.resume.entries())
     pending = len(outcome.resume.pending())
-    return (f"{len(list(outcome.resume.entries()))} entries, {bullets} bullets; "
+    verbatim, _total = verbatim_share(outcome)
+    second = f" ({outcome.reworded} in the second pass)" if outcome.reworded else ""
+    return (f"{len(list(outcome.resume.entries()))} entries, {bullets} bullets, {bullets - verbatim} reworded{second}; "
             f"{len(outcome.hard())} hard violation(s) handled, {pending} bullet(s) need approval")

@@ -207,3 +207,20 @@ def master_text(master: MasterResume) -> str:
         parts += [skill for fact in entry.facts for skill in fact.skills]
     parts += master.skills.all() + master.certifications + [a.text for a in master.awards]
     return "\n".join(p for p in parts if p and p.strip())
+
+
+def posting_overlap(analysis: JobAnalysis | None, text: str) -> float:
+    """How much of the posting's language one bullet uses: weighted keywords plus shared key-phrase words.
+
+    The deterministic half of judging a rewrite against the posting: a reword
+    candidate that uses less of the posting's language than the wording it
+    replaces is not kept (tailor_resume.reword_verbatim). The loop's judge
+    scores the whole resume afterwards.
+    """
+    if analysis is None or not text.strip():
+        return 0.0
+    keywords = sum(weight for display, weight in keyword_weights(analysis).values()
+                   if textutil.contains_term(text, display))
+    phrase_words = {w[:6] for w in textutil.content_words(" ".join([*analysis.key_phrases, *analysis.responsibilities]))}
+    shared = {w[:6] for w in textutil.content_words(text)} & phrase_words
+    return round(keywords + 0.5 * len(shared), 3)

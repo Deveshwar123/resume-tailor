@@ -278,7 +278,7 @@ def test_run_job_end_to_end(master, status, workspace):
     })
     state = loop.run_job(Session(master=master, skills_status=status, llm=llm), text_path=posting,
                          options=RunOptions(), today=date(2026, 10, 13))
-    assert llm.purposes()[:7] == ["analyze", "research", "brief", "tailor", "judge", "revise", "judge"]
+    assert llm.purposes()[:8] == ["analyze", "research", "brief", "tailor", "reword", "judge", "revise", "judge"]
     assert state.brief.intern_work[0].tier.value == "posting"
     tailor_call = next(c for c in llm.calls if c["purpose"] == "tailor")
     assert "Interns build data pipelines in Python and SQL." in tailor_call["system"]     # research shapes emphasis

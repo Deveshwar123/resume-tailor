@@ -8,12 +8,12 @@ from pydantic import TypeAdapter
 
 from src.cover_letter import CoverLetterDraft, SentenceFixBatch
 from src.models import (
-    BulletFixBatch, CompanyBriefDraft, InterpretedRequirements, JobAnalysisExtract, Judgment, ProposedFact,
+    BulletFixBatch, CompanyBriefDraft, InterpretedRequirements, JobAnalysisExtract, Judgment, ProposedFact, RewordBatch,
     TailoredResumeDraft,
 )
 
 WIRE_MODELS = [JobAnalysisExtract, InterpretedRequirements, CompanyBriefDraft, TailoredResumeDraft, BulletFixBatch,
-               Judgment, ProposedFact, CoverLetterDraft, SentenceFixBatch]
+               Judgment, ProposedFact, CoverLetterDraft, SentenceFixBatch, RewordBatch]
 UNSUPPORTED = ("minimum", "maximum", "exclusiveMinimum", "exclusiveMaximum", "multipleOf", "minLength", "maxLength", "pattern")
 MAX_UNION_FIELDS = 16
 
