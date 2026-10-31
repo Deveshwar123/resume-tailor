@@ -266,7 +266,7 @@ def write(llm, system: str, ctx: ValidationContext, job_text: str, brief: Compan
 
     def retry(requests: list[dict]) -> list[SentenceFix]:
         try:
-            batch = llm.parse(purpose="fix", model=config.WRITE_MODEL, system=system,
+            batch = llm.parse(purpose="fix", model=config.FAST_MODEL, system=system,
                               user=FIX_USER.format(requests=json.dumps(requests, indent=1, ensure_ascii=False)),
                               schema=SentenceFixBatch)
         except LLMError as exc:
@@ -329,6 +329,15 @@ def to_markdown(letter: CoverLetter, master: MasterResume, company: str, role: s
     return "\n".join(lines) + "\n"
 
 
+def to_text(letter: CoverLetter, master: MasterResume, today: date) -> str:
+    """The letter alone, as plain text ready to paste into an application form (no provenance table)."""
+    lines = [f"{today:%B} {today.day}, {today.year}", "", letter.greeting, ""]
+    for paragraph in letter.paragraphs():
+        lines += [paragraph, ""]
+    lines += [letter.closing, textutil.plain(master.contact.name)]
+    return "\n".join(lines).strip() + "\n"
+
+
 def render_docx(letter: CoverLetter, master: MasterResume, path: Path, today: date) -> Path:
     """A plain one-column letter in the resume's font."""
     from docx import Document
@@ -372,11 +381,14 @@ def render_docx(letter: CoverLetter, master: MasterResume, path: Path, today: da
 
 
 def save(letter: CoverLetter, master: MasterResume, out_dir: Path, company: str, role: str, today: date) -> CoverLetter:
-    """Write cover_letter.md / .docx / .pdf into the run's output folder."""
+    """Write cover_letter.md (with where each sentence comes from) / .txt / .docx / .pdf into the output folder."""
     out_dir.mkdir(parents=True, exist_ok=True)
     markdown = out_dir / "cover_letter.md"
     markdown.write_text(to_markdown(letter, master, company, role, today), encoding="utf-8")
     letter.files["cover_letter_md"] = markdown
+    text = out_dir / "cover_letter.txt"
+    text.write_text(to_text(letter, master, today), encoding="utf-8")
+    letter.files["cover_letter_txt"] = text
     docx = render_docx(letter, master, out_dir / "cover_letter.docx", today)
     letter.files["cover_letter_docx"] = docx
     pdf = render.docx_to_pdf(docx, out_dir)

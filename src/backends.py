@@ -22,6 +22,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import time
 from types import SimpleNamespace
 from typing import Any, TypeVar
 
@@ -104,26 +105,27 @@ class ClaudeCodeLLM:
             raise LLMError("Claude Code is not logged in.", "Run `claude` once and sign in, then try again.")
         raise LLMError(f"Claude Code reported an error on the {purpose} step: {message[:300]}")
 
-    def _record(self, purpose: str, model: str, data: dict) -> None:
+    def _record(self, purpose: str, model: str, data: dict, seconds: float = 0.0) -> None:
         usage = data.get("usage") or {}
         self.tracker.record(purpose, model, SimpleNamespace(
             input_tokens=usage.get("input_tokens", 0), output_tokens=usage.get("output_tokens", 0),
             cache_read_input_tokens=usage.get("cache_read_input_tokens", 0),
             cache_creation_input_tokens=usage.get("cache_creation_input_tokens", 0),
             server_tool_use=SimpleNamespace(web_search_requests=usage.get("server_tool_use", {}).get("web_search_requests", 0)
-                                            if isinstance(usage.get("server_tool_use"), dict) else 0)))
+                                            if isinstance(usage.get("server_tool_use"), dict) else 0)), seconds)
 
     def parse(self, *, purpose: str, model: str, system: str, user: str, schema: type[T],
               cache_system: bool = True, max_tokens: int | None = None) -> T:
         args = self._base(model, system, purpose) + [
             "--tools", "", "--output-format", "json", "--json-schema", json.dumps(strict_schema(schema))]
+        started = time.monotonic()
         raw = self._run(args, user, purpose)
         try:
             data = json.loads(raw)
         except json.JSONDecodeError as exc:
             raise LLMError(f"Claude Code returned something other than JSON on the {purpose} step: {raw[:200]}") from exc
         self._check(data, purpose)
-        self._record(purpose, model, data)
+        self._record(purpose, model, data, time.monotonic() - started)
         structured = data.get("structured_output")
         if structured is None:
             try:
@@ -137,6 +139,7 @@ class ClaudeCodeLLM:
         args = self._base(model, system, purpose) + [
             "--tools", "WebSearch", "WebFetch", "--allowedTools", "WebSearch", "WebFetch",
             "--output-format", "stream-json", "--verbose"]
+        started = time.monotonic()
         raw = self._run(args, user, purpose)
         text, final, sources, searches = "", None, [], 0
         for line in raw.splitlines():
@@ -160,7 +163,7 @@ class ClaudeCodeLLM:
         if final is None:
             raise LLMError("Claude Code returned no result for the research step.")
         self._check(final, purpose)
-        self._record(purpose, model, final)
+        self._record(purpose, model, final, time.monotonic() - started)
         text = str(final.get("result") or "")
         return SearchResult(text=text.strip(), sources=sources, searches=searches)
 
@@ -222,6 +225,7 @@ class OllamaLLM:
         messages = [{"role": "system", "content": system}, {"role": "user", "content": user}]
         last_error = ""
         for attempt in range(2):          # one retry with the parse error, small models slip sometimes
+            started = time.monotonic()
             data = self._post("/api/chat", {
                 "model": local, "messages": messages, "stream": False, "think": False,
                 "format": strict_schema(schema),
@@ -229,7 +233,8 @@ class OllamaLLM:
             }, timeout=config.OLLAMA_TIMEOUT_SECONDS)
             self.tracker.record(purpose, local, SimpleNamespace(
                 input_tokens=data.get("prompt_eval_count", 0), output_tokens=data.get("eval_count", 0),
-                cache_read_input_tokens=0, cache_creation_input_tokens=0, server_tool_use=None))
+                cache_read_input_tokens=0, cache_creation_input_tokens=0, server_tool_use=None),
+                time.monotonic() - started)
             content = (data.get("message") or {}).get("content") or ""
             try:
                 return schema.model_validate(json.loads(content))

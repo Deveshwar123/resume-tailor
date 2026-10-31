@@ -7,7 +7,9 @@ clear message (never a stack trace) when something is missing, and returns a
 
 from __future__ import annotations
 
+import json
 import os
+import time
 from dataclasses import dataclass, field
 
 from dotenv import dotenv_values
@@ -36,6 +38,11 @@ def load_env() -> dict[str, str]:
         override = (os.environ.get(name) or values.get(name) or "").strip()
         if override:
             setattr(config, name, override)
+    # Other fact banks and data folders (for example a test run on the fictional example data).
+    paths = {name: (os.environ.get(name) or values.get(name) or "").strip()
+             for name in ("TAILOR_MASTER_RESUME", "TAILOR_SKILLS_STATUS", "TAILOR_DATA_DIR")}
+    config.use_paths(master=paths["TAILOR_MASTER_RESUME"] or None, skills=paths["TAILOR_SKILLS_STATUS"] or None,
+                     data_dir=paths["TAILOR_DATA_DIR"] or None)
     return values
 
 
@@ -53,6 +60,35 @@ def read_api_key(env: dict[str, str]) -> str:
             "Add a line like ANTHROPIC_API_KEY=sk-ant-... (create a key at https://platform.claude.com/settings/keys).",
         )
     return key
+
+
+def _model_check_path():
+    return config.CACHE_DIR / "model_check.json"
+
+
+def models_recently_verified(models: list[str]) -> bool:
+    """True when these models passed the check on this backend within MODEL_CHECK_TTL_HOURS.
+
+    With Claude Code the check is two real `claude -p` calls (about 4 s); a
+    model that has since become unavailable still fails clearly on its first
+    real call.
+    """
+    try:
+        saved = json.loads(_model_check_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return (saved.get("backend") == config.LLM_BACKEND and saved.get("models") == sorted(set(models))
+            and time.time() - float(saved.get("at", 0)) < config.MODEL_CHECK_TTL_HOURS * 3600)
+
+
+def remember_model_check(models: list[str]) -> None:
+    path = _model_check_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"backend": config.LLM_BACKEND, "models": sorted(set(models)), "at": time.time()}),
+                        encoding="utf-8")
+    except OSError:
+        pass                                  # only an optimization
 
 
 def backend_needs_test_call() -> bool:
@@ -92,8 +128,10 @@ def run_startup(*, need_api: bool = True, verify_models: bool = True, quiet: boo
     llm = None
     if need_api:
         llm = make_llm(env)
-        if verify_models:
-            llm.verify_models([config.FAST_MODEL, config.WRITE_MODEL])
+        models = [config.FAST_MODEL, config.WRITE_MODEL]
+        if verify_models and (test_call or not models_recently_verified(models)):
+            llm.verify_models(models)
+            remember_model_check(models)
         if test_call and backend_needs_test_call():
             llm.verify_access(config.FAST_MODEL)
 

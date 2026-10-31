@@ -114,6 +114,7 @@ class Approval(StrEnum):
     edited = "edited"
     reverted = "reverted"
     override = "override"      # user kept an edit that failed validation
+    accepted = "accepted"      # --auto: a rewrite that raised no validator flag, used without a person
 
 
 class SectionName(StrEnum):
@@ -979,3 +980,4 @@ class CallUsage(BaseModel):
     cache_write_tokens: int = 0
     web_searches: int = 0
     cost_usd: float = 0.0
+    seconds: float = 0.0                       # wall-clock time of the call

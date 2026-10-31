@@ -5,14 +5,16 @@ Every run saves into its output folder:
     posting.txt                    the job posting text (the link is in archive.json)
     master_resume.snapshot.yaml    master_resume.yaml exactly as it was for this run
     resume.docx / resume.pdf       the final resume (written by render.py)
-    cover_letter.md / .docx / .pdf the cover letter, when --cover-letter was used
+    cover_letter.md / .txt / .docx / .pdf  the cover letter, when --cover-letter (or --auto) was used
     <Name>_Resume.pdf              the same PDF under a filename fit to send
     tailored_resume.json           every bullet with its facts and approval state
     scores.json                    the full score breakdown and round history
     company_brief.json             the research brief with source tiers
     eligibility.json               the eligibility table
-    usage.json                     token usage and estimated cost per Claude call
+    usage.json                     token usage, estimated cost, and seconds per Claude call
     archive.json                   an index of the above (company, role, link, date)
+    report.json                    a machine-readable summary: scores, bullet counts, timings, and
+                                   the absolute path of every file (what tailor_for_job() returns)
 
 `python tailor.py --find "Company"` lists matching archives, so months later I
 can pull up exactly what I sent.
@@ -29,6 +31,7 @@ import yaml
 
 import config
 from src import textutil, ui
+from src.models import Approval, ChangeType
 
 if TYPE_CHECKING:
     from src.llm import UsageTracker
@@ -112,6 +115,7 @@ def write_archive(state: RunState, tracker: UsageTracker | None = None) -> Path:
         })
         files["usage"] = "usage.json"
 
+    state.files = {key: (out / name).resolve() for key, name in files.items()}
     index = {
         "company": state.analysis.company,
         "role": state.analysis.role,
@@ -127,7 +131,67 @@ def write_archive(state: RunState, tracker: UsageTracker | None = None) -> Path:
     }
     path = out / INDEX_NAME
     _write_json(path, index)
+    state.files["archive"] = path.resolve()
     return path
+
+
+def bullet_stats(state: RunState) -> dict[str, int]:
+    """How many bullets on the final resume differ from the verified wording, and how many rewrites were reverted."""
+    bullets = [b for _e, _i, b in state.resume.bullets()] if state.resume is not None else []
+    reworded = sum(1 for b in bullets if not textutil.same_text(b.text, b.original_text or b.text))
+    return {
+        "total": len(bullets),
+        "reworded": reworded,
+        "verbatim": len(bullets) - reworded,
+        "reverted": sum(1 for b in bullets if b.approval == Approval.reverted),
+        "proposed_rewrites": sum(1 for b in bullets if b.change_type != ChangeType.unchanged),
+    }
+
+
+def run_report(state: RunState, tracker: UsageTracker | None = None) -> dict:
+    """The run in one JSON-ready dict: what tailor_for_job() returns and report.json holds."""
+    quality = state.final_quality
+    files = {key: str(path) for key, path in sorted(state.files.items())}
+    files["report_json"] = str((state.out_dir / "report.json").resolve())
+    return {
+        "ok": True,
+        "company": state.analysis.company,
+        "role": state.analysis.role,
+        "url": state.job.url,
+        "date": state.run_date.isoformat(),
+        "mode": "auto" if state.options.auto else ("strict" if state.options.strict else "normal"),
+        "out_dir": str(state.out_dir.resolve()),
+        "files": files,
+        "scores": {
+            "resume_quality": quality.total if quality else None,
+            "target": state.options.target,
+            "target_reached": bool(quality and quality.total >= state.options.target),
+            "categories": quality.categories if quality else {},
+            "job_match": state.job_match.score if state.job_match else None,
+            "keyword_coverage": state.coverage_final.score if state.coverage_final else None,
+            "keyword_coverage_master": state.coverage_master.score if state.coverage_master else None,
+            "ats": state.ats.score if state.ats else None,
+            "rounds": [record.quality.total for result in state.loops for record in result.history],
+        },
+        "bullets": bullet_stats(state),
+        "pages": state.rendered.pages if state.rendered else None,
+        "cover_letter_sentences_removed": (sum(1 for s in state.cover_letter.sentences if not s.kept)
+                                           if state.cover_letter is not None else None),
+        "eligibility_flags": state.eligibility.flags(),
+        "stop_note": state.stop_note,
+        "notes": list(state.notes),
+        "seconds": state.seconds,
+        "timings": dict(state.timings),
+        "claude_calls": len(tracker.calls) if tracker is not None else 0,
+        "claude_seconds_by_step": ({purpose: round(row["seconds"], 1) for purpose, row in tracker.by_purpose().items()}
+                                   if tracker is not None else {}),
+    }
+
+
+def write_run_report(state: RunState, tracker: UsageTracker | None = None) -> dict:
+    data = run_report(state, tracker)
+    _write_json(state.out_dir / "report.json", data)
+    return data
 
 
 # ---------------------------------------------------------------------------

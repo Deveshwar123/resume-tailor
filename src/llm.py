@@ -13,6 +13,7 @@ logging, run-cost accounting, and friendly errors instead of stack traces.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 from typing import Any, TypeVar
 
@@ -63,7 +64,7 @@ class UsageTracker:
 
     calls: list[CallUsage] = field(default_factory=list)
 
-    def record(self, purpose: str, model: str, usage: Any) -> CallUsage:
+    def record(self, purpose: str, model: str, usage: Any, seconds: float = 0.0) -> CallUsage:
         server_tools = getattr(usage, "server_tool_use", None)
         call = CallUsage(
             purpose=purpose,
@@ -73,6 +74,7 @@ class UsageTracker:
             cache_read_tokens=int(getattr(usage, "cache_read_input_tokens", 0) or 0),
             cache_write_tokens=int(getattr(usage, "cache_creation_input_tokens", 0) or 0),
             web_searches=int(getattr(server_tools, "web_search_requests", 0) or 0),
+            seconds=round(float(seconds or 0.0), 2),
         )
         call.cost_usd = estimate_cost(
             model, call.input_tokens, call.output_tokens,
@@ -84,6 +86,10 @@ class UsageTracker:
     def total_cost(self) -> float:
         return sum(c.cost_usd for c in self.calls)
 
+    def total_seconds(self) -> float:
+        """Time spent waiting on calls, added up (calls that ran in parallel count separately)."""
+        return sum(c.seconds for c in self.calls)
+
     def total_tokens(self) -> tuple[int, int]:
         return (
             sum(c.input_tokens + c.cache_read_tokens + c.cache_write_tokens for c in self.calls),
@@ -93,8 +99,9 @@ class UsageTracker:
     def by_purpose(self) -> dict[str, dict[str, float]]:
         out: dict[str, dict[str, float]] = {}
         for call in self.calls:
-            row = out.setdefault(call.purpose, {"calls": 0, "input": 0, "output": 0, "cost": 0.0})
+            row = out.setdefault(call.purpose, {"calls": 0, "input": 0, "output": 0, "cost": 0.0, "seconds": 0.0})
             row["calls"] += 1
+            row["seconds"] += call.seconds
             row["input"] += call.input_tokens + call.cache_read_tokens + call.cache_write_tokens
             row["output"] += call.output_tokens
             row["cost"] += call.cost_usd
@@ -270,8 +277,10 @@ class LLM:
         effort = config.EFFORT.get(purpose)
         if effort:
             kwargs["output_config"] = {"effort": effort}
+        started = time.monotonic()
         response = self._request("parse", model, kwargs)
-        self.tracker.record(purpose, getattr(response, "model", model) or model, getattr(response, "usage", None))
+        self.tracker.record(purpose, getattr(response, "model", model) or model, getattr(response, "usage", None),
+                            time.monotonic() - started)
         self._check_stop(response, purpose)
         parsed = getattr(response, "parsed_output", None)
         if parsed is None:
@@ -312,8 +321,10 @@ class LLM:
             effort = config.EFFORT.get(purpose)
             if effort:
                 kwargs["output_config"] = {"effort": effort}
+            started = time.monotonic()
             response = self._request("create", model, kwargs)
-            call = self.tracker.record(purpose, getattr(response, "model", model) or model, getattr(response, "usage", None))
+            call = self.tracker.record(purpose, getattr(response, "model", model) or model, getattr(response, "usage", None),
+                                       time.monotonic() - started)
             searches += call.web_searches
             self._check_stop(response, purpose)
             blocks = _block_dicts(response.content)

@@ -19,6 +19,13 @@ bullets so future runs need fewer approvals.
 
 When nobody is at the keyboard (batch mode, pipes), nothing can be approved, so
 every pending change reverts to its verified original wording.
+
+--auto (an app calling the tool) is the one exception, by design: a rewrite
+whose only reason for review is that it is a substantial rewording (the
+"change" flag) raised no validator flag at all, so it is used and marked
+`accepted`. Anything a validator check flagged still reverts. `settle()` applies
+these rules inside the revision loop, so the judge scores exactly the text that
+will be rendered.
 """
 
 from __future__ import annotations
@@ -42,11 +49,15 @@ class Decision:
     original: str
     proposed: str
     final: str
-    action: str                       # approved | edited | reverted | override
+    action: str                       # approved | edited | reverted | override | accepted (--auto)
     reasons: list[str] = field(default_factory=list)
     fact_ids: list[str] = field(default_factory=list)
     automatic: bool = False           # True when nobody was asked (batch mode)
     saved_as: str | None = None       # id of the approved bullet written to master_resume.yaml
+
+
+REVIEW_ONLY_FLAGS = {"change"}        # "substantially reworded": a reason to show a person, not a validator finding
+_REVERT_NOTE = "reverted to the verified wording: "
 
 
 def revert_pending(resume: TailoredResume, reason: str = "not approved (no one at the keyboard)") -> list[Decision]:
@@ -60,7 +71,41 @@ def revert_pending(resume: TailoredResume, reason: str = "not approved (no one a
         ))
         bullet.final_text = bullet.original_text
         bullet.approval = Approval.reverted
-        bullet.history.append(f"reverted to the verified wording: {reason}")
+        bullet.history.append(_REVERT_NOTE + reason)
+    return decisions
+
+
+def settle(resume: TailoredResume, *, accept_clean: bool, reason: str) -> None:
+    """Resolve every pending bullet without a person (batch and --auto).
+
+    `accept_clean` (--auto): a rewrite whose flags are only REVIEW_ONLY_FLAGS is
+    used. Every other pending bullet, and every pending bullet in batch mode,
+    reverts to its verified wording. Strict-mode proposals carry a "strict" flag
+    and so always revert.
+    """
+    for _entry, _index, bullet in resume.pending():
+        if accept_clean and {flag.code for flag in bullet.flags} <= REVIEW_ONLY_FLAGS:
+            bullet.final_text = bullet.rewritten_text
+            bullet.approval = Approval.accepted
+            bullet.history.append("used automatically (--auto): the rewrite passed every validator check")
+        else:
+            bullet.final_text = bullet.original_text
+            bullet.approval = Approval.reverted
+            bullet.history.append(_REVERT_NOTE + reason)
+
+
+def settled_decisions(resume: TailoredResume) -> list[Decision]:
+    """The Decision records (for changes.md) of bullets that `settle()` resolved."""
+    decisions: list[Decision] = []
+    for entry, _index, bullet in resume.bullets():
+        reverted = bullet.approval == Approval.reverted and any(n.startswith(_REVERT_NOTE) for n in bullet.history)
+        if bullet.approval != Approval.accepted and not reverted:
+            continue
+        decisions.append(Decision(
+            entry_id=entry.source_id, original=bullet.original_text, proposed=bullet.rewritten_text,
+            final=bullet.final_text, action="accepted" if bullet.approval == Approval.accepted else "reverted",
+            reasons=[f.message for f in bullet.flags], fact_ids=list(bullet.fact_ids), automatic=True,
+        ))
     return decisions
 
 

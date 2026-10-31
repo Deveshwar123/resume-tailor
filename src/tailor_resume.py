@@ -234,7 +234,7 @@ def make_retry_fn(llm, system: str, ctx: ValidationContext) -> validate.RetryFn:
             })
         try:
             batch = llm.parse(
-                purpose="fix", model=config.WRITE_MODEL, system=system,
+                purpose="fix", model=config.FAST_MODEL, system=system,     # a light repair: the fast model
                 user=FIX_USER.format(requests=json.dumps(payload, indent=1, ensure_ascii=False)),
                 schema=BulletFixBatch,
             )

@@ -620,7 +620,7 @@ def make_tighten_fn(llm, system: str) -> TightenFn:
     def tighten(items: list[TightenItem]) -> dict[str, str]:
         payload = [{"key": i.key, "text": i.text, "fact_ids": i.fact_ids} for i in items]
         try:
-            batch = llm.parse(purpose="tighten", model=config.WRITE_MODEL, system=system,
+            batch = llm.parse(purpose="tighten", model=config.FAST_MODEL, system=system,   # light step: fast model
                               user=TIGHTEN_USER.format(items=json.dumps(payload, indent=1, ensure_ascii=False)),
                               schema=BulletFixBatch)
         except LLMError:

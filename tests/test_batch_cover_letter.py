@@ -315,7 +315,9 @@ def test_batch_runs_every_link_without_prompts(master, status, workspace, monkey
     assert "scalable" not in (acme / "resume.docx").read_bytes().decode("latin-1")
     assert "reverted (automatic)" in (acme / "changes.md").read_text()
     # Each job reports only its own Claude usage.
-    assert len(json.loads((acme / "usage.json").read_text())["calls"]) == 4       # analyze, tailor, judge x2
+    # analyze, tailor, judge: the flagged rewrite was reverted inside the loop, so the judge already
+    # scored the text that was rendered and no final re-judge was needed.
+    assert len(json.loads((acme / "usage.json").read_text())["calls"]) == 3
     assert len(json.loads((globex / "usage.json").read_text())["calls"]) == 4     # analyze, tailor, reword, judge
     # The dashboard is refreshed at the end.
     assert (workspace / "output" / "insights.html").exists()

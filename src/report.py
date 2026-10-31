@@ -77,6 +77,7 @@ _APPROVAL_LABEL = {
     Approval.auto: "auto-approved", Approval.pending: "PENDING", Approval.approved: "approved by me",
     Approval.edited: "edited by me", Approval.reverted: "reverted to verified wording",
     Approval.override: "kept by me although the facts do not support it",
+    Approval.accepted: "used automatically (--auto): it passed every validator check",
 }
 
 
@@ -218,10 +219,14 @@ def scores_md(state: RunState, tracker: UsageTracker | None = None) -> str:
     if tracker is not None and tracker.calls:
         tokens_in, tokens_out = tracker.total_tokens()
         parts.append("## Claude usage\n")
-        rows = [[purpose, int(v["calls"]), f"{int(v['input']):,}", f"{int(v['output']):,}", f"${v['cost']:.4f}"]
+        rows = [[purpose, int(v["calls"]), f"{int(v['input']):,}", f"{int(v['output']):,}", f"${v['cost']:.4f}",
+                 f"{v.get('seconds', 0.0):.1f}"]
                 for purpose, v in tracker.by_purpose().items()]
-        rows.append(["**total**", len(tracker.calls), f"{tokens_in:,}", f"{tokens_out:,}", f"**${tracker.total_cost():.4f}**"])
-        parts.append(table(["Step", "Calls", "Input tokens", "Output tokens", "Cost (est.)"], rows) + "\n")
+        rows.append(["**total**", len(tracker.calls), f"{tokens_in:,}", f"{tokens_out:,}", f"**${tracker.total_cost():.4f}**",
+                     f"{tracker.total_seconds():.1f}"])
+        parts.append(table(["Step", "Calls", "Input tokens", "Output tokens", "Cost (est.)", "Seconds"], rows) + "\n")
+        parts.append("_Seconds are per call and add up across calls that ran at the same time (research with the "
+                     "analysis, the cover letter with the revision loop), so the total can exceed the run time._\n")
         billing = getattr(state, "billing", "api")
         if billing == "subscription":
             parts.append("_These calls ran through Claude Code on your Claude subscription, so nothing was billed per token; "
@@ -230,6 +235,10 @@ def scores_md(state: RunState, tracker: UsageTracker | None = None) -> str:
             parts.append("_These calls ran on a local model through Ollama and cost nothing._\n")
         else:
             parts.append("_Cost is estimated from the token counts and the prices in config.py._\n")
+    if state.timings:
+        parts.append("## Run time\n")
+        rows = [[name, f"{seconds:.1f}"] for name, seconds in state.timings.items()]
+        parts.append(table(["Step", "Seconds"], rows) + "\n")
     return "\n".join(parts)
 
 

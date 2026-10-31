@@ -19,6 +19,12 @@ the model:
 The tailor weights official and posting items heavily, third-party items
 lightly, and never sees unverified ones. Research only changes what gets
 emphasized; validate.py makes sure it can never add a claim, skill, or tool.
+
+Speed: the two calls need only the posting, not its analysis, so loop.py runs
+`collect()` alongside the analysis and eligibility calls and assigns the tiers
+with `finish()` once the company name is known. `find_cached()` recognizes a
+company whose brief is already cached from the posting itself, so a cached
+company is never researched again just because the analysis was not ready.
 """
 
 from __future__ import annotations
@@ -63,6 +69,16 @@ RESEARCH_USER = """Company: {company}
 Role: {role}
 Location: {location}
 Job posting link: {url}"""
+
+# Used when research starts before the posting has been analyzed.
+RESEARCH_USER_FROM_POSTING = """Work out the company and the role from the start of the job posting below, then research them.
+
+Job posting link: {url}
+
+<posting_start>
+{excerpt}
+</posting_start>"""
+POSTING_EXCERPT_CHARS = 2500
 
 BRIEF_SYSTEM = """You turn research notes about a company into a structured brief for a resume-tailoring tool.
 
@@ -269,21 +285,27 @@ def build_brief(draft: CompanyBriefDraft, analysis: JobAnalysis, job: JobText,
     return brief
 
 
-def research_company(llm, analysis: JobAnalysis, job: JobText, today: date | None = None,
-                     use_cache: bool = True) -> CompanyBrief:
-    """Research the company. Never fatal: on failure the run continues without a brief."""
-    today = today or date.today()
-    if use_cache:
-        cached = read_cache(analysis.company)
-        if cached is not None:
-            return cached
+Collected = tuple[CompanyBriefDraft, list[tuple[str, str]]] | None
+
+
+def collect(llm, job: JobText, today: date, analysis: JobAnalysis | None = None) -> Collected:
+    """The two research calls (web search, then structuring). Needs only the posting.
+
+    Returns the structured draft and the URLs the search actually returned, or
+    None when research failed (never fatal). Safe to run in a worker thread: it
+    shows no spinner and asks nothing.
+    """
+    if analysis is not None:
+        user = RESEARCH_USER.format(company=analysis.company, role=analysis.role,
+                                    location=analysis.location or "not stated", url=job.url or "not given")
+    else:
+        user = RESEARCH_USER_FROM_POSTING.format(url=job.url or "not given",
+                                                 excerpt=job.text.strip()[:POSTING_EXCERPT_CHARS])
     try:
         found = llm.search(
             purpose="research", model=config.WRITE_MODEL,
             system=RESEARCH_SYSTEM.format(today=today.isoformat(), max_searches=config.MAX_RESEARCH_SEARCHES),
-            user=RESEARCH_USER.format(company=analysis.company, role=analysis.role,
-                                      location=analysis.location or "not stated", url=job.url or "not given"),
-            max_searches=config.MAX_RESEARCH_SEARCHES,
+            user=user, max_searches=config.MAX_RESEARCH_SEARCHES,
         )
         if found.errors:
             ui.warn("Web search reported: " + ", ".join(found.errors))
@@ -295,10 +317,55 @@ def research_company(llm, analysis: JobAnalysis, job: JobText, today: date | Non
         )
     except LLMError as exc:
         ui.warn(f"Company research failed ({exc.message}); continuing without it.")
+        return None
+    return draft, found.sources
+
+
+def finish(collected: Collected, analysis: JobAnalysis, job: JobText, today: date) -> CompanyBrief:
+    """Assign tiers now that the company is known, and cache the brief."""
+    if collected is None:
         return CompanyBrief(company=analysis.company, researched_on=today.isoformat())
-    brief = build_brief(draft, analysis, job, found.sources, today)
+    draft, sources = collected
+    brief = build_brief(draft, analysis, job, sources, today)
     write_cache(brief)
     return brief
+
+
+def find_cached(job: JobText) -> CompanyBrief | None:
+    """A fresh cached brief for the company this posting names, found before the posting is analyzed.
+
+    The company counts as named when its name appears in the first lines of the
+    posting or its slug in the link (job boards put the company in the path).
+    """
+    folder = config.CACHE_DIR / "research"
+    if not folder.exists():
+        return None
+    head = textutil.normalize(job.text[:POSTING_EXCERPT_CHARS])
+    link = re.sub(r"[^a-z0-9]", "", (job.url or "").lower())
+    for path in sorted(folder.glob("*.json")):
+        try:
+            company = json.loads(path.read_text(encoding="utf-8"))["brief"]["company"]
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        slug = company_slug(company)
+        named = (re.search(r"(?<![a-z0-9])" + re.escape(textutil.normalize(company)) + r"(?![a-z0-9])", head)
+                 or (len(slug) >= 4 and slug in link))
+        if company and named:
+            cached = read_cache(company)
+            if cached is not None:
+                return cached
+    return None
+
+
+def research_company(llm, analysis: JobAnalysis, job: JobText, today: date | None = None,
+                     use_cache: bool = True) -> CompanyBrief:
+    """Research the company. Never fatal: on failure the run continues without a brief."""
+    today = today or date.today()
+    if use_cache:
+        cached = read_cache(analysis.company)
+        if cached is not None:
+            return cached
+    return finish(collect(llm, job, today, analysis), analysis, job, today)
 
 
 def tier_counts(brief: CompanyBrief) -> dict[str, int]:

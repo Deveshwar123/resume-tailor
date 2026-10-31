@@ -278,7 +278,12 @@ def test_run_job_end_to_end(master, status, workspace):
     })
     state = loop.run_job(Session(master=master, skills_status=status, llm=llm), text_path=posting,
                          options=RunOptions(), today=date(2026, 10, 13))
-    assert llm.purposes()[:8] == ["analyze", "research", "brief", "tailor", "reword", "judge", "revise", "judge"]
+    calls = llm.purposes()
+    # Research runs alongside the analysis, so those two may interleave; everything after is in order.
+    assert sorted(calls[:3]) == ["analyze", "brief", "research"] and calls.index("research") < calls.index("brief")
+    assert calls[3:8] == ["tailor", "reword", "judge", "revise", "judge"]
+    research_call = next(c for c in llm.calls if c["purpose"] == "research")
+    assert "<posting_start>" in research_call["user"] and "Data Engineering Intern" in research_call["user"]
     assert state.brief.intern_work[0].tier.value == "posting"
     tailor_call = next(c for c in llm.calls if c["purpose"] == "tailor")
     assert "Interns build data pipelines in Python and SQL." in tailor_call["system"]     # research shapes emphasis
@@ -305,7 +310,8 @@ def test_declining_at_the_eligibility_prompt_stops_the_run(master, status, works
     answers("n")
     with pytest.raises(UserAbort):
         loop.run_job(Session(master=master, skills_status=status, llm=llm), text_path=posting, today=date(2026, 10, 13))
-    assert llm.purposes() == ["analyze"]                                    # nothing was tailored
+    # Nothing was tailored. (Company research starts alongside the analysis, so it may have begun.)
+    assert "tailor" not in llm.purposes() and "analyze" in llm.purposes()
 
 
 

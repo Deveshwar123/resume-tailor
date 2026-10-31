@@ -122,10 +122,11 @@ def test_scores_report_has_rounds_three_scores_ats_and_cost(run):
     assert "## Job Match" in text and "required skills | 100%" in text and "- Missing: AWS, machine learning" in text
     assert "## Keyword Coverage" in text and "Whole master resume" in text and "Final resume" in text
     assert "## ATS checks" in text and "| page count | pass | 1 page(s) |" in text
-    # 4 fast-model calls (analyze + 3 judge) and 3 write-model calls (tailor, fix, revise), this job only.
+    # 4 fast-model calls (analyze, fix, 2 judge) and 3 write-model calls (tailor, reword, revise), this job only.
+    # Batch mode settles approvals inside the loop, so no final re-judge is needed.
     assert "## Claude usage" in text and "| tailor | 1 | 1,000 | 100 | $0.0030 |" in text
-    assert "| judge | 3 | 3,000 | 300 | $0.0004 |" in text
-    assert "| **total** | 8 | 8,000 | 800 | **$0.0126** |" in text                # includes the rewording pass
+    assert "| judge | 2 | 2,000 | 200 | $0.0003 |" in text and "| fix | 1 | 1,000 | 100 | $0.0001 |" in text
+    assert "| **total** | 7 | 7,000 | 700 | **$0.0096** |" in text
 
 
 @needs_soffice
@@ -169,7 +170,7 @@ def test_archive_snapshots_exactly_what_was_produced(run):
     scores = json.loads((out / "scores.json").read_text())
     assert len(scores["rounds"]) == 2 and scores["job_match"]["score"] == state.job_match.score
     usage = json.loads((out / "usage.json").read_text())
-    assert len(usage["calls"]) == 8 and usage["total_cost_usd"] == pytest.approx(0.0126, abs=1e-5)   # with the rewording pass
+    assert len(usage["calls"]) == 7 and usage["total_cost_usd"] == pytest.approx(0.0096, abs=1e-5)
 
 
 @needs_soffice

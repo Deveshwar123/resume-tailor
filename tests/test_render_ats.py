@@ -325,7 +325,7 @@ def test_tighten_call_reuses_the_cached_system_prompt(ctx):
     llm = ScriptedLLM({"tighten": [BulletFixBatch(fixes=[BulletFix(key="exp_acme#0", rewritten_text="Short.", fact_ids=[])])]})
     system = tailor_resume.build_system(ctx)
     out = render.make_tighten_fn(llm, system)([render.TightenItem("exp_acme#0", "exp_acme", "A long bullet.", ["exp_acme_f01"])])
-    assert out == {"exp_acme#0": "Short."} and llm.calls[0]["system"] == system and llm.calls[0]["model"] == config.WRITE_MODEL
+    assert out == {"exp_acme#0": "Short."} and llm.calls[0]["system"] == system and llm.calls[0]["model"] == config.FAST_MODEL
 
 
 def test_section_override_moves_a_role(master_data, status, analysis, resume):

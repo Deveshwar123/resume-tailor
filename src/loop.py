@@ -22,15 +22,26 @@
 
 Only Resume Quality drives the loop. Job Match and Keyword Coverage are
 informational and never trigger a revision.
+
+Speed (a live run took 168-253 s): independent Claude calls overlap. Company
+research starts as soon as the posting text is in, alongside the analysis and
+eligibility calls, and the cover letter is written alongside the judge /
+revise loop (config.PARALLEL_CALLS). In unattended runs (--batch, --auto)
+approvals are settled inside the loop, so the judge scores exactly what will be
+rendered and the final re-judge is needed only if page fitting changed text.
+Every step's time is recorded in RunState.timings (scores.md, report.json).
 """
 
 from __future__ import annotations
 
+import time
 import traceback
+from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterator
 
 import config
 from src import (
@@ -38,7 +49,7 @@ from src import (
     research, revise, scoring, tailor_resume, textutil, ui,
 )
 from src.llm import UsageTracker
-from src.errors import TailorError, UserAbort
+from src.errors import FetchError, TailorError, UserAbort
 from src.fetch import JobText
 from src.models import (
     AtsReport,
@@ -76,6 +87,13 @@ class RunOptions:
     cover_letter: bool = False
     plateau_delta: float = config.PLATEAU_DELTA
     plateau_rounds: int = config.PLATEAU_ROUNDS
+    auto: bool = False                # --auto / tailor_for_job(): no prompts, validator-clean rewrites are used
+    record: bool = True               # append a row to data/applications.csv
+
+    @property
+    def unattended(self) -> bool:
+        """Nobody can be asked anything (batch or auto)."""
+        return self.batch or self.auto
 
 
 # ---------------------------------------------------------------------------
@@ -223,6 +241,9 @@ class RunState:
     interview: interview.InterviewResult | None = None
     cover_letter: cover_letter.CoverLetter | None = None
     ledger: scoring.BulletLedger = field(default_factory=scoring.BulletLedger)   # per-bullet judge scores
+    timings: dict[str, float] = field(default_factory=dict)      # seconds per step
+    seconds: float = 0.0                                         # the whole run
+    files: dict[str, Path] = field(default_factory=dict)         # every file written, by key (archive.py)
 
 
 def output_dir(analysis: JobAnalysis, run_date: date, root: Path | None = None) -> Path:
@@ -235,6 +256,24 @@ def output_dir(analysis: JobAnalysis, run_date: date, root: Path | None = None) 
         counter += 1
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+@contextmanager
+def timed(timings: dict[str, float], name: str) -> Iterator[None]:
+    """Add the wall-clock time of the block to timings[name]."""
+    started = time.monotonic()
+    try:
+        yield
+    finally:
+        timings[name] = round(timings.get(name, 0.0) + time.monotonic() - started, 1)
+
+
+def settle_unattended(options: RunOptions, outcome: ValidationOutcome) -> ValidationOutcome:
+    """Batch / --auto: resolve approvals on a fresh draft right away, so the judge scores the real text."""
+    if options.unattended:
+        approval.settle(outcome.resume, accept_clean=options.auto and not options.strict,
+                        reason="--auto: flagged by the validator" if options.auto else "batch mode")
+    return outcome
 
 
 # ---------------------------------------------------------------------------
@@ -271,8 +310,9 @@ def step_loop(state: RunState, llm, first: ValidationOutcome) -> None:
 
     def revise_fn(draft: TailoredResume, fixes: list[Fix]) -> ValidationOutcome:
         with ui.console.status(f"Revising: applying {len(fixes)} rewrite fix(es)..."):
-            return revise.revise(llm, state.system, ctx, draft, fixes)
+            return settle_unattended(state.options, revise.revise(llm, state.system, ctx, draft, fixes))
 
+    first = settle_unattended(state.options, first)
     state.loop = run_revision_loop(first, judge_fn=judge_fn, quality_fn=quality_fn, revise_fn=revise_fn,
                                    options=state.options, on_round=_show_round, tiebreak_fn=tiebreak_fn)
     state.loops.append(state.loop)
@@ -286,7 +326,7 @@ def step_interview(state: RunState, llm, session, today: date) -> None:
     """Below target with open questions: ask me, add the facts I approve, re-tailor, loop once more."""
     options = state.options
     assert state.loop is not None
-    if (state.loop.best_quality.total >= options.target or not options.interview or options.batch
+    if (state.loop.best_quality.total >= options.target or not options.interview or options.unattended
             or not ui.is_interactive()):
         return
     asks = interview.questions_from(state.loop.best_judgment.fixes)
@@ -315,7 +355,11 @@ def step_interview(state: RunState, llm, session, today: date) -> None:
 def step_approval(state: RunState) -> None:
     """The human checkpoint: nothing flagged is rendered without a decision."""
     assert state.resume is not None
-    state.decisions = approval.review(state.resume, state.ctx, batch=state.options.batch)
+    if state.options.unattended:
+        settle_unattended(state.options, ValidationOutcome(resume=state.resume))    # anything still pending
+        state.decisions = approval.settled_decisions(state.resume)
+    else:
+        state.decisions = approval.review(state.resume, state.ctx, batch=state.options.batch)
     ui.info(f"  {approval.summarize(state.decisions)}")
     approval.offer_to_save(state.ctx.master, state.decisions)
 
@@ -348,12 +392,17 @@ def step_render(state: RunState, llm) -> None:
         ui.warn(f"ATS check failed - {check.name}: {check.detail}")
 
 
-def step_cover_letter(state: RunState, llm) -> None:
-    """--cover-letter: same facts, same validator, same approval rules as the resume."""
+def step_cover_letter(state: RunState, llm, drafted: Future | None = None) -> None:
+    """--cover-letter: same facts, same validator, same approval rules as the resume.
+
+    `drafted` is the letter already being written in the background (started
+    right after the tailor, alongside the revision loop).
+    """
     sources = cover_letter.company_sources(state.job.text, state.brief)
     with ui.console.status("Drafting the cover letter..."):
-        letter = cover_letter.write(llm, state.system, state.ctx, state.job.text, state.brief)
-    cover_letter.review(letter, state.ctx, sources, batch=state.options.batch)
+        letter = drafted.result() if drafted is not None else cover_letter.write(
+            llm, state.system, state.ctx, state.job.text, state.brief)
+    cover_letter.review(letter, state.ctx, sources, batch=state.options.unattended)
     with ui.console.status("Rendering the cover letter..."):
         cover_letter.save(letter, state.ctx.master, state.out_dir, state.analysis.company, state.analysis.role, state.run_date)
     state.cover_letter = letter
@@ -407,7 +456,10 @@ def print_summary(state: RunState, tracker=None) -> None:
     flags = state.eligibility.flags()
     if flags:
         lines.append(f"[yellow]Eligibility flags: {len(flags)}[/yellow] (see eligibility.md)")
-    lines += ["", f"Output: {state.out_dir}"]
+    stats = archive.bullet_stats(state)
+    lines.append(f"Bullets          {stats['reworded']} of {stats['total']} reworded for this posting "
+                 f"({stats['reverted']} rewrite(s) reverted to verified wording)")
+    lines += ["", f"Output: {state.out_dir}", f"Run time: {state.seconds:.0f} s"]
     if tracker is not None and tracker.calls:
         tokens_in, tokens_out = tracker.total_tokens()
         usage = f"{len(tracker.calls)} calls, {tokens_in:,} in / {tokens_out:,} out tokens"
@@ -427,77 +479,146 @@ def print_summary(state: RunState, tracker=None) -> None:
 # ---------------------------------------------------------------------------
 
 
-def run_job(session, *, url: str | None = None, text_path: Path | None = None,
-            options: RunOptions | None = None, today: date | None = None) -> RunState:
-    """Tailor a resume for one posting. Raises `TailorError` on expected failures."""
+def run_job(session, *, url: str | None = None, text_path: Path | None = None, posting_text: str | None = None,
+            options: RunOptions | None = None, today: date | None = None, out_dir: Path | None = None) -> RunState:
+    """Tailor a resume for one posting. Raises `TailorError` on expected failures.
+
+    `posting_text` gives the posting directly (no fetch). `out_dir` writes every
+    file there instead of output/<Company>_<Role>_<date>/.
+    """
     options = options or RunOptions()
     today = today or date.today()
     llm, master, status = session.llm, session.master, session.skills_status
     tracker = getattr(llm, "tracker", None)
     first_call = len(tracker.calls) if tracker is not None else 0
+    started = time.monotonic()
+    timings: dict[str, float] = {}
+    # Two workers: research overlaps the analysis, and the cover letter overlaps the revision loop.
+    pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="tailor") if config.PARALLEL_CALLS else None
+    try:
+        state = _run_job(session, llm, master, status, url, text_path, posting_text, options, today, out_dir,
+                         timings, pool)
+    finally:
+        if pool is not None:
+            pool.shutdown(wait=False, cancel_futures=True)
+    state.seconds = round(time.monotonic() - started, 1)
 
-    ui.step("Fetching the job posting")
-    job = fetch.get_job_text(url, text_path, allow_paste=not options.batch)
-    ui.info(f"  {job.words} words ({job.source})")
+    with timed(state.timings, "reports"):
+        ui.step("Writing reports and archiving this version")
+        # Usage for THIS job only (in batch mode the tracker spans every job).
+        usage = UsageTracker(calls=tracker.calls[first_call:]) if tracker is not None else None
+        report.write_reports(state, usage)
+        archive.write_archive(state, usage)
+        if options.record:
+            report.append_application(state)
+    state.seconds = round(time.monotonic() - started, 1)
+    archive.write_run_report(state, usage)          # report.json, with the final timings
+    print_summary(state, usage)
+    return state
 
-    ui.step("Analyzing the posting")
-    with ui.console.status("Extracting requirements and keywords..."):
-        analysis = analyze.analyze_job(llm, job, today)
-    analyze.save_analysis(analysis)
-    ui.info(f"  {analysis.role} at {analysis.company} ({analysis.job_type.value}); "
-            f"{len(analysis.required_skills)} required and {len(analysis.preferred_skills)} preferred skills")
-    for quote in analysis.unverified_quotes:
-        ui.warn(f'A quoted requirement was not found word-for-word in the posting: "{quote[:90]}"')
 
-    ui.step("Checking eligibility")
-    eligible = eligibility.check_eligibility(analysis, master, status, llm=llm, posting_text=job.text, today=today)
-    if not eligibility.confirm_continue(eligible, batch=options.batch):
+def _run_job(session, llm, master, status, url, text_path, posting_text, options: RunOptions, today: date,
+             out_dir: Path | None, timings: dict[str, float], pool: ThreadPoolExecutor | None) -> RunState:
+    with timed(timings, "fetch"):
+        ui.step("Fetching the job posting")
+        if posting_text is not None:
+            job = JobText(posting_text.strip(), url or "", "given")
+            if job.words < 40:
+                raise FetchError(f"The posting text has only {job.words} words.", "Pass the full job description.")
+        else:
+            job = fetch.get_job_text(url, text_path, allow_paste=not options.unattended)
+        ui.info(f"  {job.words} words ({job.source})")
+
+    # Company research needs only the posting, so it starts now and runs while the posting is analyzed.
+    can_search = getattr(llm, "can_search", True)
+    research_job: Future | None = None
+    brief: CompanyBrief | None = None
+    if options.research and can_search:
+        brief = research.find_cached(job)
+        if brief is None and pool is not None:
+            research_job = pool.submit(research.collect, llm, job, today)
+
+    with timed(timings, "analyze"):
+        ui.step("Analyzing the posting")
+        with ui.console.status("Extracting requirements and keywords..."):
+            analysis = analyze.analyze_job(llm, job, today)
+        analyze.save_analysis(analysis)
+        ui.info(f"  {analysis.role} at {analysis.company} ({analysis.job_type.value}); "
+                f"{len(analysis.required_skills)} required and {len(analysis.preferred_skills)} preferred skills")
+        for quote in analysis.unverified_quotes:
+            ui.warn(f'A quoted requirement was not found word-for-word in the posting: "{quote[:90]}"')
+
+    with timed(timings, "eligibility"):
+        ui.step("Checking eligibility")
+        eligible = eligibility.check_eligibility(analysis, master, status, llm=llm, posting_text=job.text, today=today)
+    if not eligibility.confirm_continue(eligible, batch=options.unattended):
         raise UserAbort("Stopped at the eligibility check - nothing was tailored.")
 
     ctx = ValidationContext(master=master, status=status, analysis=analysis,
                             mode=Mode.strict if options.strict else Mode.normal)
+    if out_dir is not None:
+        out_dir = Path(out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
     state = RunState(options=options, job=job, analysis=analysis, eligibility=eligible, ctx=ctx,
-                     out_dir=output_dir(analysis, today), run_date=today, billing=getattr(llm, "billing", "api"))
+                     out_dir=out_dir or output_dir(analysis, today), run_date=today,
+                     billing=getattr(llm, "billing", "api"), timings=timings)
 
-    if options.research and not getattr(llm, "can_search", True):
-        ui.info("  Company research skipped: the local model cannot search the web.")
-    elif options.research:
-        ui.step("Researching the company")
-        with ui.console.status(f"Searching the web (up to {config.MAX_RESEARCH_SEARCHES} searches)..."):
-            state.brief = research.research_company(llm, analysis, job, today)
-        ui.info(f"  {research.summarize(state.brief)}")
+    with timed(timings, "research (waiting)"):
+        if options.research and not can_search:
+            ui.info("  Company research skipped: the local model cannot search the web.")
+        elif options.research:
+            ui.step("Researching the company")
+            if brief is not None:
+                state.brief = brief
+                ui.info("  (cached)")
+            elif research_job is not None:
+                with ui.console.status("Finishing the company research..."):
+                    collected = research_job.result()
+                state.brief = research.read_cache(analysis.company) or research.finish(collected, analysis, job, today)
+            else:
+                with ui.console.status(f"Searching the web (up to {config.MAX_RESEARCH_SEARCHES} searches)..."):
+                    state.brief = research.research_company(llm, analysis, job, today)
+            ui.info(f"  {research.summarize(state.brief)}")
 
-    ui.step("Tailoring" + (" (strict: my approved wording)" if options.strict else ""))
-    with ui.console.status("Writing the first draft..."):
-        first, state.system = tailor_resume.tailor(llm, ctx, state.brief)
-    ui.info(f"  {tailor_resume.summarize(first)}")
+    with timed(timings, "tailor"):
+        ui.step("Tailoring" + (" (strict: my approved wording)" if options.strict else ""))
+        with ui.console.status("Writing the first draft..."):
+            first, state.system = tailor_resume.tailor(llm, ctx, state.brief)
+        ui.info(f"  {tailor_resume.summarize(first)}")
 
-    ui.step(f"Judging and revising (target {options.target:.1f}, up to {options.max_rounds} rounds)")
-    step_loop(state, llm, first)
-    step_interview(state, llm, session, today)
+    # The letter depends on the fact bank, the posting, and the research, not on the resume
+    # wording, so it is written while the resume is judged and revised.
+    letter_job: Future | None = None
+    if options.cover_letter and pool is not None:
+        letter_job = pool.submit(cover_letter.write, llm, state.system, ctx, job.text, state.brief)
+
+    with timed(timings, "judge and revise"):
+        ui.step(f"Judging and revising (target {options.target:.1f}, up to {options.max_rounds} rounds)")
+        step_loop(state, llm, first)
+    system_before = state.system
+    with timed(timings, "interview"):
+        step_interview(state, llm, session, today)
+    if state.system != system_before:
+        letter_job = None                      # new interview facts: write the letter again from them
     assert state.resume is not None
     loop_text = render.build_view(state.resume, master).plain_text(redact_contact=True)
 
-    ui.step("Approval checkpoint")
-    step_approval(state)
+    with timed(timings, "approval"):
+        ui.step("Approval checkpoint")
+        step_approval(state)
 
-    ui.step("Rendering")
-    step_render(state, llm)
+    with timed(timings, "render"):
+        ui.step("Rendering")
+        step_render(state, llm)
 
-    ui.step("Scoring")
-    step_scores(state, llm, loop_text)
+    with timed(timings, "scores"):
+        ui.step("Scoring")
+        step_scores(state, llm, loop_text)
 
     if options.cover_letter:
-        ui.step("Cover letter")
-        step_cover_letter(state, llm)
-
-    ui.step("Writing reports and archiving this version")
-    # Usage for THIS job only (in batch mode the tracker spans every job).
-    usage = UsageTracker(calls=tracker.calls[first_call:]) if tracker is not None else None
-    report.write_reports(state, usage)
-    archive.write_archive(state, usage)
-    report.append_application(state)
-    print_summary(state, usage)
+        with timed(timings, "cover letter"):
+            ui.step("Cover letter")
+            step_cover_letter(state, llm, letter_job)
     return state
 
 

@@ -29,6 +29,35 @@ CACHE_DIR = DATA_DIR / "cache"            # gitignored
 BACKUP_DIR = DATA_DIR / "backups"         # timestamped master_resume.yaml backups
 OUTPUT_DIR = ROOT / "output"              # gitignored
 
+
+def use_paths(master: str | Path | None = None, skills: str | Path | None = None,
+              data_dir: str | Path | None = None) -> dict[str, Path]:
+    """Point the run at another fact bank, skills file, or data folder. Returns the previous values.
+
+    Set from TAILOR_MASTER_RESUME / TAILOR_SKILLS_STATUS / TAILOR_DATA_DIR (shell or
+    .env), from `--master` / `--skills` / `--data-dir`, or by `tailor_for_job()`.
+    A data folder holds postings/, applications.csv, cache/, and backups/, so a
+    run on other data never writes to this repo's data/ folder.
+    """
+    global MASTER_RESUME_PATH, SKILLS_STATUS_PATH, DATA_DIR, POSTINGS_DIR, APPLICATIONS_CSV, CACHE_DIR, BACKUP_DIR
+    previous = {"MASTER_RESUME_PATH": MASTER_RESUME_PATH, "SKILLS_STATUS_PATH": SKILLS_STATUS_PATH,
+                "DATA_DIR": DATA_DIR, "POSTINGS_DIR": POSTINGS_DIR, "APPLICATIONS_CSV": APPLICATIONS_CSV,
+                "CACHE_DIR": CACHE_DIR, "BACKUP_DIR": BACKUP_DIR}
+    if master:
+        MASTER_RESUME_PATH = Path(master).expanduser().resolve()
+    if skills:
+        SKILLS_STATUS_PATH = Path(skills).expanduser().resolve()
+    if data_dir:
+        DATA_DIR = Path(data_dir).expanduser().resolve()
+        POSTINGS_DIR, APPLICATIONS_CSV = DATA_DIR / "postings", DATA_DIR / "applications.csv"
+        CACHE_DIR, BACKUP_DIR = DATA_DIR / "cache", DATA_DIR / "backups"
+    return previous
+
+
+def restore_paths(previous: dict[str, Path]) -> None:
+    """Undo `use_paths()`."""
+    globals().update(previous)
+
 # --------------------------------------------------------------------------
 # Backend: how the Claude calls are made (see src/backends.py)
 #   anthropic   - Anthropic API key in .env (billed per token)
@@ -47,20 +76,26 @@ OLLAMA_TIMEOUT_SECONDS = 1800
 # --------------------------------------------------------------------------
 # Models (verified against the API at startup; see src/startup.py)
 # --------------------------------------------------------------------------
-FAST_MODEL = os.environ.get("FAST_MODEL", "claude-haiku-5-5")    # analyze, judge, interpret
-WRITE_MODEL = os.environ.get("WRITE_MODEL", "claude-sonnet-5-5")  # tailor, revise, research
+FAST_MODEL = os.environ.get("FAST_MODEL", "claude-haiku-5-5")    # analyze, judge, interpret, brief, fix, tighten
+WRITE_MODEL = os.environ.get("WRITE_MODEL", "claude-sonnet-5-5")  # tailor, reword, revise, research, cover letter
+# A successful model check is remembered this long (per backend and model pair), so a normal
+# run does not spend two calls proving the models exist. `--check` always checks afresh.
+MODEL_CHECK_TTL_HOURS = 24
+# Independent Claude calls run at the same time: company research alongside the posting
+# analysis, and the cover letter alongside the judge / revise loop.
+PARALLEL_CALLS = True
 
 # Effort per task. Both models think adaptively; effort is the only depth knob.
 # (Sampling parameters such as temperature are rejected by these models.)
 EFFORT = {
     "analyze": "medium",
     "interpret": "low",
-    "judge": "high",        # strict instruction following matters most here
+    "judge": "medium",      # high took ~21 s a round; per-bullet scores give the judge a tighter structure
     "tailor": "medium",
     "reword": "medium",     # second pass for bullets the tailor returned word for word
     "revise": "medium",
-    "fix": "low",           # single-bullet repair after a validation failure
-    "tighten": "low",       # page-fit wording tightening
+    "fix": "low",           # single-bullet repair after a validation failure (fast model)
+    "tighten": "low",       # page-fit wording tightening (fast model)
     "research": "medium",
     "brief": "low",         # structuring research notes into a CompanyBrief
     "interview": "low",
