@@ -352,18 +352,21 @@ def ctx(master, status, analysis):
 # ---------------------------------------------------------------------------
 
 
-def make_judgment(impact: int = 8, relevance: int = 8, clarity: int = 8, language: int = 8,
-                  fixes: list[tuple[str, str, str, float]] | None = None):
-    """A Judgment; `fixes` is a list of (type, target, detail, expected_gain)."""
+def make_judgment(impact: float = 8, relevance: float = 8, clarity: float = 8, language: float = 8,
+                  fixes: list[tuple[str, str, str, float]] | None = None,
+                  bullets: list[tuple[int, int, int, int]] | None = None):
+    """A Judgment; `fixes` is a list of (type, target, detail, expected_gain) and `bullets`
+    a list of per-bullet (impact, relevance, clarity, language) scores for bullets [1], [2], ..."""
     from src.models import Judgment
 
-    def cat(score: int) -> dict:
+    def cat(score: float) -> dict:
         return {"score": score, "justification": f"scored {score}"}
 
     return Judgment.model_validate({
         "category_scores": {"impact": cat(impact), "relevance": cat(relevance),
                             "clarity": cat(clarity), "language": cat(language)},
-        "bullet_scores": [],
+        "bullet_scores": [{"bullet": n, "impact": i, "relevance": r, "clarity": c, "language": l}
+                          for n, (i, r, c, l) in enumerate(bullets or [], 1)],
         "fixes": [{"type": t, "target": target, "detail": detail, "expected_gain": gain}
                   for t, target, detail, gain in (fixes or [])],
     })

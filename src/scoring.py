@@ -3,7 +3,10 @@
 Three separate scores:
 
 1. Resume Quality (0-10, the only score with a target): the weighted average of
-   the judge's four category scores plus the ATS score from ats_check.py.
+   the judge's four category scores plus the ATS score from ats_check.py. Each
+   judged category blends the judge's whole-resume score with the average of its
+   per-bullet scores (config.JUDGE_BULLET_SHARE), so rewording a few bullets
+   moves the total instead of leaving whole-number scores tied.
 2. Job Match (0-100, informational): how well my verified skills and my
    eligibility cover the job's weighted requirements. It measures *me*, not the
    writing, so it does not change when the resume is rewritten.
@@ -41,15 +44,58 @@ def clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
 
 
-def quality(judgment: Judgment, ats: AtsReport, weights: dict[str, float] | None = None) -> QualityScore:
-    """Weighted average of the judged categories and the code-computed ATS score."""
+class BulletLedger:
+    """Every per-bullet score the judge gave during one run, keyed by the bullet's text.
+
+    The judge scores each draft fresh, so the same unchanged bullet can get a 7
+    in one round and an 8 in the next. Averaging every score a bullet text has
+    received cuts that noise: unchanged bullets settle, and the total moves
+    because of the bullets that actually changed. The judge never sees this
+    ledger; it is bookkeeping in code.
+    """
+
+    def __init__(self) -> None:
+        self.scores: dict[str, list[dict[str, int]]] = {}
+
+    def add(self, judgment: Judgment, bullets: list[str]) -> None:
+        for item in judgment.bullet_scores:
+            if 1 <= item.bullet <= len(bullets):
+                key = textutil.squash(bullets[item.bullet - 1])
+                self.scores.setdefault(key, []).append(
+                    {name: getattr(item, name) for name in config.JUDGED_CATEGORIES})
+
+    def means(self, bullets: list[str]) -> tuple[dict[str, float], int]:
+        """Per category, the average over the page's bullets of each bullet's mean score; and how many were scored."""
+        per_bullet = [self.scores[key] for key in (textutil.squash(b) for b in bullets) if key in self.scores]
+        if not per_bullet:
+            return {}, 0
+        out = {name: sum(sum(s[name] for s in seen) / len(seen) for seen in per_bullet) / len(per_bullet)
+               for name in config.JUDGED_CATEGORIES}
+        return out, len(per_bullet)
+
+
+def quality(judgment: Judgment, ats: AtsReport, weights: dict[str, float] | None = None,
+            bullet_means: dict[str, float] | None = None, bullets_scored: int = 0) -> QualityScore:
+    """Weighted average of the judged categories and the code-computed ATS score.
+
+    `bullet_means` (from `BulletLedger.means`) is blended into each judged
+    category with config.JUDGE_BULLET_SHARE. Without it, the whole-resume scores
+    are used as they are.
+    """
     weights = dict(weights or config.QUALITY_WEIGHTS)
     scores = judgment.category_scores
-    categories = {name: clamp(float(getattr(scores, name).score), 1.0, 10.0) for name in config.JUDGED_CATEGORIES}
+    categories: dict[str, float] = {}
+    for name in config.JUDGED_CATEGORIES:
+        value = clamp(float(getattr(scores, name).score), 1.0, 10.0)
+        if bullet_means and name in bullet_means:
+            share = config.JUDGE_BULLET_SHARE.get(name, 0.0)
+            value = (1 - share) * value + share * clamp(bullet_means[name], 1.0, 10.0)
+        categories[name] = round(value, 3)
     categories["ats"] = clamp(float(ats.score), 0.0, 10.0)
     total_weight = sum(weights[name] for name in categories)
     total = sum(weights[name] * categories[name] for name in categories) / total_weight
-    return QualityScore(total=round(total, 2), categories=categories, weights=weights, ats_final=ats.final)
+    return QualityScore(total=round(total, 2), categories=categories, weights=weights, ats_final=ats.final,
+                        bullets_scored=bullets_scored if bullet_means else 0)
 
 
 # ---------------------------------------------------------------------------

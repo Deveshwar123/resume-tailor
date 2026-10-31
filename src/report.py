@@ -181,6 +181,12 @@ def scores_md(state: RunState, tracker: UsageTracker | None = None) -> str:
                 + ["ATS scored on the real PDF"])
     parts.append(table(head, rows) + "\n")
     parts.append("_In-loop ATS uses the text-level checks; the final row uses every check on the rendered PDF and DOCX._\n")
+    if quality.bullets_scored:
+        shares = ", ".join(f"{name} {share:.0%}" for name, share in config.JUDGE_BULLET_SHARE.items())
+        parts.append(f"_Each judged category blends the judge's whole-resume score with the average of its scores for "
+                     f"the {quality.bullets_scored} bullets on the page ({shares} from the bullets). A bullet's score is "
+                     f"the mean of every score its exact wording received this run. Equal totals go to the draft with "
+                     f"the higher Keyword Coverage._\n")
     if state.final_judgment is not None:
         scores = state.final_judgment.category_scores
         parts.append("Judge's reasons (final):\n")

@@ -5,14 +5,21 @@ posting) parts of the company brief, and the current resume text. It never sees
 earlier scores, earlier drafts, the fact bank, or the tailor's reasoning, so
 each round is scored fresh.
 
-It returns four category scores (1-10, each with a one-line justification) and
-a list of fixes. It never returns a total: scoring.py computes Resume Quality.
+It returns four category scores (1-10, one decimal allowed, each with a
+one-line justification), integer scores for every numbered bullet, and a list
+of fixes. It never returns a total: scoring.py computes Resume Quality.
+
+Why per-bullet scores: a revision usually rewords two or three bullets. A
+whole-resume score in whole numbers did not move for that, so a real
+improvement looked like a tie and the loop stopped. scoring.quality() blends
+the average of the bullet scores into each category, so every bullet that got
+better moves the total a little.
 """
 
 from __future__ import annotations
 
 import config
-from src.models import CompanyBrief, Fix, FixType, Judgment
+from src.models import BulletScore, CompanyBrief, Fix, FixType, Judgment
 
 MAX_FIXES = 12
 
@@ -22,13 +29,17 @@ You will be given one resume. Score how well it is WRITTEN and how well its cont
 
 Judge writing quality separately from qualifications. This candidate may simply not have a skill or experience the posting asks for. That is a qualification gap: report it as a REAL_GAP fix, and do not let it lower Impact or Clarity. Score those two on the bullets that are on the page, as writing.
 
-Categories (integer 1-10 each, with a one-line justification)
+Categories (1-10 each, with a one-line justification; use one decimal place, such as 7.5, when the resume sits between two anchors)
 - impact: do the bullets lead with strong, accurate verbs and show results, scale, or outcome wherever the content gives them room to? Vague duty lists score low; specific, outcome-led bullets score high.
 - relevance: is the content on the page the right content for this role, and is the most relevant material the most prominent (order of sections, entries, and bullets)? Space spent on material this role does not care about lowers the score.
 - clarity: is every bullet clear, concise, and specific? Consistent tense, no filler, no jargon without substance, no bullet that needs rereading.
 - language: does the resume use the posting's own terminology where it naturally and truthfully fits, without keyword stuffing?
 
 Score anchors: 9-10 means you would send it on with no edits. 7-8 is solid with a few fixable weaknesses. 5-6 has several weak or off-target bullets. 4 or below is mostly weak. Reserve 9 and 10 for resumes that truly earn them.
+
+Bullet scores
+- The bullets are numbered [1], [2], ... For EVERY numbered bullet, return `bullet` (its number) and integer 1-10 scores for impact, relevance, clarity, and language, judged on that bullet alone with the same anchors. Relevance here means how much this bullet matters for this role.
+- Score each bullet on its own wording, not on its neighbors.
 
 Fixed layout rules (do not ask to change these; they are applied by code for applicant-tracking systems):
 - Within each section, entries are always listed newest first. Never ask to move an entry above or below another entry in the same section. To give an entry more or less weight, ask to change its bullets, cut it, or change the order of whole sections.
@@ -64,13 +75,25 @@ def build_system(posting_text: str, brief: CompanyBrief | None) -> str:
     return JUDGE_SYSTEM.format(posting=posting_text.strip(), brief=brief_text(brief))
 
 
-def clean(judgment: Judgment) -> Judgment:
-    """Clamp scores to 1-10 and tidy the fix list. No totals are computed here."""
+def clean(judgment: Judgment, bullet_count: int | None = None) -> Judgment:
+    """Clamp scores to 1-10 and tidy the fix list. No totals are computed here.
+
+    Category scores keep one decimal. Bullet scores are clamped to whole numbers
+    1-10; a bullet number that is not on the page (or repeats) is dropped.
+    """
     scores = judgment.category_scores
     for name in config.JUDGED_CATEGORIES:
         category = getattr(scores, name)
-        category.score = int(max(1, min(10, category.score)))
+        category.score = round(max(1.0, min(10.0, float(category.score))), 1)
         category.justification = category.justification.strip()
+    kept: dict[int, BulletScore] = {}
+    for item in judgment.bullet_scores:
+        if item.bullet < 1 or (bullet_count is not None and item.bullet > bullet_count) or item.bullet in kept:
+            continue
+        for name in config.JUDGED_CATEGORIES:
+            setattr(item, name, int(max(1, min(10, round(float(getattr(item, name)))))))
+        kept[item.bullet] = item
+    judgment.bullet_scores = [kept[n] for n in sorted(kept)]
     fixes: list[Fix] = []
     for fix in judgment.fixes:
         if not fix.detail.strip():
@@ -82,8 +105,13 @@ def clean(judgment: Judgment) -> Judgment:
     return judgment
 
 
-def judge_resume(llm, posting_text: str, brief: CompanyBrief | None, resume_text: str) -> Judgment:
-    """Score one resume. The user message is the resume text and nothing else."""
+def judge_resume(llm, posting_text: str, brief: CompanyBrief | None, resume_text: str,
+                 bullet_count: int | None = None) -> Judgment:
+    """Score one resume. The user message is the resume text and nothing else.
+
+    `resume_text` should number its bullets (`ResumeView.plain_text(number_bullets=True)`);
+    `bullet_count` lets clean() drop bullet scores for numbers that are not on the page.
+    """
     judgment = llm.parse(
         purpose="judge",
         model=config.FAST_MODEL,
@@ -91,7 +119,14 @@ def judge_resume(llm, posting_text: str, brief: CompanyBrief | None, resume_text
         user=f"<resume>\n{resume_text.strip()}\n</resume>",
         schema=Judgment,
     )
-    return clean(judgment)
+    return clean(judgment, bullet_count)
+
+
+def judge_view(llm, posting_text: str, brief: CompanyBrief | None, view) -> tuple[Judgment, list[str]]:
+    """Judge a rendered view (contact redacted, bullets numbered). Returns the judgment and the bullet texts."""
+    bullets = view.bullet_texts()
+    text = view.plain_text(redact_contact=True, number_bullets=True)
+    return judge_resume(llm, posting_text, brief, text, len(bullets)), bullets
 
 
 def summarize(judgment: Judgment) -> str:

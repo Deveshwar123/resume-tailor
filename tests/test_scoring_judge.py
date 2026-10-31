@@ -179,3 +179,61 @@ def test_rubric_separates_writing_from_qualifications():
     system = judge.build_system(SAMPLE_POSTING, None)
     assert "REAL_GAP" in system and "do not let it lower Impact or Clarity" in system
     assert "strict technical recruiter" in system
+
+
+# ---------------------------------------------------------------------------
+# Per-bullet scores: real improvements move the total
+# ---------------------------------------------------------------------------
+
+
+def test_bullet_scores_are_blended_into_the_categories():
+    judgment = make_judgment(6, 6, 6, 6, bullets=[(6, 6, 6, 6), (8, 8, 8, 8)])
+    ledger = scoring.BulletLedger()
+    ledger.add(judgment, ["first bullet.", "second bullet."])
+    means, scored = ledger.means(["first bullet.", "second bullet."])
+    result = scoring.quality(judgment, ats(10.0), bullet_means=means, bullets_scored=scored)
+    # impact: 0.4 * 6 + 0.6 * 7 = 6.6; relevance leans on the whole resume: 0.6 * 6 + 0.4 * 7 = 6.4
+    assert result.categories["impact"] == pytest.approx(6.6) and result.categories["relevance"] == pytest.approx(6.4)
+    assert result.bullets_scored == 2
+    assert result.total > scoring.quality(judgment, ats(10.0)).total
+
+
+def test_rewording_one_bullet_moves_the_total_when_whole_resume_scores_tie():
+    """The live failure: whole-number category scores stayed 5/5/6/4 after a revision, so it looked like a tie."""
+    ledger = scoring.BulletLedger()
+    before = make_judgment(5, 5, 6, 4, bullets=[(5, 5, 6, 4), (5, 5, 6, 4), (5, 5, 6, 4)])
+    after = make_judgment(5, 5, 6, 4, bullets=[(5, 5, 6, 4), (5, 5, 6, 4), (7, 6, 7, 7)])
+    first, second = ["a.", "b.", "c."], ["a.", "b.", "c reworded."]
+    ledger.add(before, first)
+    q0 = scoring.quality(before, ats(10.0), bullet_means=ledger.means(first)[0])
+    ledger.add(after, second)
+    q1 = scoring.quality(after, ats(10.0), bullet_means=ledger.means(second)[0])
+    assert q1.total > q0.total
+
+
+def test_the_ledger_averages_repeated_scores_of_an_unchanged_bullet():
+    ledger = scoring.BulletLedger()
+    ledger.add(make_judgment(bullets=[(6, 6, 6, 6)]), ["Same bullet."])
+    ledger.add(make_judgment(bullets=[(8, 8, 8, 8)]), ["Same  bullet"])       # same text, other spacing
+    means, scored = ledger.means(["Same bullet."])
+    assert means["impact"] == pytest.approx(7.0) and scored == 1
+    assert ledger.means(["never scored"]) == ({}, 0)
+
+
+def test_judge_numbers_bullets_and_cleans_bullet_scores(master):
+    from src import render
+    from src.models import TailoredBullet, TailoredEntry, TailoredResume
+
+    resume = TailoredResume(experiences=[TailoredEntry(source_id="exp_acme", bullets=[
+        TailoredBullet(rewritten_text="Wrote SQL queries.", final_text="Wrote SQL queries."),
+        TailoredBullet(rewritten_text="Tested REST API endpoints.", final_text="Tested REST API endpoints.")])])
+    view = render.build_view(resume, master)
+    raw = make_judgment(7.46, 12, bullets=[(9, 9, 9, 9), (14, 0, 7, 7), (5, 5, 5, 5)])     # bullet [3] is not on the page
+    llm = ScriptedLLM({"judge": [raw]})
+    judgment, bullets = judge.judge_view(llm, SAMPLE_POSTING, None, view)
+    assert "- [1] Wrote SQL queries." in llm.calls[0]["user"] and "- [2] Tested REST API endpoints." in llm.calls[0]["user"]
+    assert master.contact.email not in llm.calls[0]["user"]
+    assert bullets == ["Wrote SQL queries.", "Tested REST API endpoints."]
+    assert judgment.category_scores.impact.score == 7.5 and judgment.category_scores.relevance.score == 10.0
+    assert [(b.bullet, b.impact, b.relevance) for b in judgment.bullet_scores] == [(1, 9, 9), (2, 10, 1)]
+    assert "bullet scores" in judge.build_system(SAMPLE_POSTING, None).lower()

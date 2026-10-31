@@ -86,24 +86,42 @@ class ResumeView:
             out.extend(section.bullets)
         return [a for a in out if a.strip()]
 
-    def plain_text(self, redact_contact: bool = False) -> str:
+    def plain_text(self, redact_contact: bool = False, number_bullets: bool = False) -> str:
         """The resume as plain text (what the judge reads and keywords are counted in).
 
         `redact_contact=True` replaces my name, phone, and email with placeholders;
-        the judge scores the writing and has no use for them.
+        the judge scores the writing and has no use for them. `number_bullets=True`
+        prefixes each bullet with [1], [2], ... in reading order (the order of
+        `bullet_texts()`), so the judge can score bullets one by one.
         """
         lines = (["[NAME]", "[location | phone | email | LinkedIn]", ""] if redact_contact
                  else [self.name, self.contact_line, ""])
+        counter = 0
+
+        def bullet(text: str) -> str:
+            nonlocal counter
+            counter += 1
+            return f"- [{counter}] {text}" if number_bullets else f"- {text}"
+
         for section in self.sections:
             lines.append(section.heading)
             for entry in section.entries:
                 lines.append(f"{entry.left}  {entry.right}".rstrip())
                 lines.extend(entry.lines)
-                lines.extend(f"- {b}" for b in entry.bullets)
+                lines.extend(bullet(b) for b in entry.bullets)
             lines.extend(section.lines)
-            lines.extend(f"- {b}" for b in section.bullets)
+            lines.extend(bullet(b) for b in section.bullets)
             lines.append("")
         return "\n".join(lines).strip() + "\n"
+
+    def bullet_texts(self) -> list[str]:
+        """Every bullet in reading order; bullet [n] in the numbered text is item n - 1."""
+        out: list[str] = []
+        for section in self.sections:
+            for entry in section.entries:
+                out.extend(entry.bullets)
+            out.extend(section.bullets)
+        return out
 
     def body_text(self) -> str:
         """Everything except the name and contact line (for keyword counting)."""

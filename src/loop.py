@@ -89,27 +89,51 @@ RoundHook = Callable[[RoundRecord], None]
 
 
 def plateaued(history: list[RoundRecord], rounds: int, delta: float) -> bool:
-    """True when each of the last `rounds` revision rounds gained less than `delta`."""
+    """True when each of the last `rounds` revision rounds failed to beat the best earlier score by `delta`.
+
+    Gains are measured against the best draft so far, not the previous round: a
+    drop followed by a recovery to the old level is not progress.
+    """
     if rounds <= 0 or len(history) <= rounds:
         return False
-    recent = history[-(rounds + 1):]
-    return all(recent[i + 1].quality.total - recent[i].quality.total < delta for i in range(rounds))
+    for i in range(len(history) - rounds, len(history)):
+        best_before = max(record.quality.total for record in history[:i])
+        if history[i].quality.total - best_before + 1e-9 >= delta:
+            return False
+    return True
+
+
+def better(new: RoundRecord, old: RoundRecord) -> bool:
+    """Does `new` beat `old`? Totals within TIE_EPSILON are a tie, won by higher Keyword Coverage."""
+    gain = new.quality.total - old.quality.total
+    if abs(gain) < config.TIE_EPSILON:
+        return new.tiebreak > old.tiebreak + 1e-9
+    return gain > 0
 
 
 def run_revision_loop(first: ValidationOutcome, *, judge_fn: JudgeFn, quality_fn: QualityFn, revise_fn: ReviseFn,
-                      options: RunOptions, on_round: RoundHook | None = None) -> LoopResult:
+                      options: RunOptions, on_round: RoundHook | None = None,
+                      tiebreak_fn: Callable[[TailoredResume], float] | None = None) -> LoopResult:
     """Judge, revise, and re-judge until a stop condition is met. Keeps the best draft.
 
     Stop conditions, checked in this order before every revision:
       1. target reached          quality >= options.target
       2. no REWRITE fixes        only questions for me or real gaps are left
       3. max rounds              options.max_rounds revisions have been made
-      4. plateau                 the last `plateau_rounds` rounds each gained < `plateau_delta`
+      4. plateau                 the last `plateau_rounds` rounds each failed to beat the best by `plateau_delta`
+
+    `tiebreak_fn` (Keyword Coverage of a draft) decides between drafts with equal
+    totals, so a revision that used more of the posting's language is kept
+    instead of losing the tie to the first draft.
     """
+    def record_for(round_number: int, draft: TailoredResume, judgment: Judgment, note: str) -> RoundRecord:
+        return RoundRecord(round=round_number, quality=quality_fn(draft, judgment), judgment=judgment, note=note,
+                           tiebreak=tiebreak_fn(draft) if tiebreak_fn else 0.0)
+
     draft = first.resume
     violations: list[Violation] = list(first.violations)
     judgment = judge_fn(draft)
-    record = RoundRecord(round=0, quality=quality_fn(draft, judgment), judgment=judgment, note="first draft")
+    record = record_for(0, draft, judgment, "first draft")
     history = [record]
     best, best_round = draft, 0
     if on_round:
@@ -136,10 +160,9 @@ def run_revision_loop(first: ValidationOutcome, *, judge_fn: JudgeFn, quality_fn
         violations.extend(outcome.violations)
         rounds += 1
         judgment = judge_fn(draft)
-        record = RoundRecord(round=rounds, quality=quality_fn(draft, judgment), judgment=judgment,
-                             note=f"applied {len(fixes)} rewrite fix(es)")
+        record = record_for(rounds, draft, judgment, f"applied {len(fixes)} rewrite fix(es)")
         history.append(record)
-        if record.quality.total > history[best_round].quality.total:
+        if better(record, history[best_round]):
             best, best_round = draft, rounds
         if on_round:
             on_round(record)
@@ -159,7 +182,7 @@ def describe_stop(result: LoopResult, options: RunOptions) -> str:
                 f"{questions} question(s) for me and {gaps} real gap(s)." + tail)
     if result.stop_reason == StopReason.max_rounds:
         return f"Stopped below target after the maximum of {options.max_rounds} revision round(s)." + tail
-    return (f"Stopped below target: the last {options.plateau_rounds} rounds each gained less than "
+    return (f"Stopped below target: the last {options.plateau_rounds} rounds each failed to beat the best draft by "
             f"{options.plateau_delta} points, so more rewording is not helping." + tail)
 
 
@@ -199,6 +222,7 @@ class RunState:
     decisions: list[approval.Decision] = field(default_factory=list)
     interview: interview.InterviewResult | None = None
     cover_letter: cover_letter.CoverLetter | None = None
+    ledger: scoring.BulletLedger = field(default_factory=scoring.BulletLedger)   # per-bullet judge scores
 
 
 def output_dir(analysis: JobAnalysis, run_date: date, root: Path | None = None) -> Path:
@@ -230,19 +254,27 @@ def step_loop(state: RunState, llm, first: ValidationOutcome) -> None:
     master, ctx = state.ctx.master, state.ctx
 
     def judge_fn(draft: TailoredResume) -> Judgment:
-        text = render.build_view(draft, master).plain_text(redact_contact=True)
+        view = render.build_view(draft, master)
         with ui.console.status("Judging the draft (independent recruiter rubric)..."):
-            return judge.judge_resume(llm, state.job.text, state.brief, text)
+            judgment, bullets = judge.judge_view(llm, state.job.text, state.brief, view)
+        state.ledger.add(judgment, bullets)
+        return judgment
 
     def quality_fn(draft: TailoredResume, judgment: Judgment) -> QualityScore:
-        return scoring.quality(judgment, ats_check.check_text(render.build_view(draft, master), state.analysis))
+        view = render.build_view(draft, master)
+        means, scored = state.ledger.means(view.bullet_texts())
+        return scoring.quality(judgment, ats_check.check_text(view, state.analysis), bullet_means=means,
+                               bullets_scored=scored)
+
+    def tiebreak_fn(draft: TailoredResume) -> float:
+        return scoring.keyword_coverage(state.analysis, render.build_view(draft, master).body_text()).score
 
     def revise_fn(draft: TailoredResume, fixes: list[Fix]) -> ValidationOutcome:
         with ui.console.status(f"Revising: applying {len(fixes)} rewrite fix(es)..."):
             return revise.revise(llm, state.system, ctx, draft, fixes)
 
     state.loop = run_revision_loop(first, judge_fn=judge_fn, quality_fn=quality_fn, revise_fn=revise_fn,
-                                   options=state.options, on_round=_show_round)
+                                   options=state.options, on_round=_show_round, tiebreak_fn=tiebreak_fn)
     state.loops.append(state.loop)
     state.resume = state.loop.best
     state.violations = list(state.loop.violations)
@@ -344,10 +376,11 @@ def step_scores(state: RunState, llm, loop_text: str) -> None:
     if content_changed_since_loop(state, loop_text):
         # Approval or page fitting changed the text, so the final version is judged afresh.
         with ui.console.status("Judging the final resume..."):
-            judgment = judge.judge_resume(llm, state.job.text, state.brief,
-                                          state.rendered.view.plain_text(redact_contact=True))
+            judgment, bullets = judge.judge_view(llm, state.job.text, state.brief, state.rendered.view)
+        state.ledger.add(judgment, bullets)
     state.final_judgment = judgment
-    state.final_quality = scoring.quality(judgment, state.ats)
+    means, scored = state.ledger.means(state.rendered.view.bullet_texts())
+    state.final_quality = scoring.quality(judgment, state.ats, bullet_means=means, bullets_scored=scored)
     state.job_match = scoring.job_match(state.analysis, state.ctx.status, state.eligibility)
     state.coverage_master = scoring.keyword_coverage(state.analysis, scoring.master_text(state.ctx.master))
     state.coverage_final = scoring.keyword_coverage(state.analysis, state.rendered.view.body_text())

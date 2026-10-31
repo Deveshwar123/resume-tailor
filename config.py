@@ -109,7 +109,7 @@ MAX_ROUNDS = 5
 # The loop stops when each of the last PLATEAU_ROUNDS rounds failed to beat the best
 # score so far by PLATEAU_DELTA. Rewording two or three bullets moves the per-bullet
 # averages by about 0.05-0.3, so the bar is set below that.
-PLATEAU_DELTA = 0.3          # TODO(problem 2): lower to 0.1 once the loop compares against the best round
+PLATEAU_DELTA = 0.1
 PLATEAU_ROUNDS = 2
 # Two drafts whose totals differ by less than this are a tie; the draft that uses more
 # of the posting's keywords (Keyword Coverage) wins it, and an exact tie keeps the earlier one.

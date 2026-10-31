@@ -93,12 +93,12 @@ def test_zero_rounds_means_no_revision():
 
 
 def test_stops_on_plateau():
-    # +1.0, then two rounds that each gain less than PLATEAU_DELTA (0.3).
-    h = Harness([6.0, 7.0, 7.1, 7.2, 9.5])
+    # +1.0, then two rounds that each beat the best by less than PLATEAU_DELTA (0.1).
+    h = Harness([6.0, 7.0, 7.05, 7.08, 9.5])
     result = h.run()
     assert result.stop_reason == StopReason.plateau
     assert len(h.revisions) == 3                                 # the 9.5 round is never run
-    assert "each gained less than 0.3" in loop.describe_stop(result, RunOptions())
+    assert "failed to beat the best draft by 0.1" in loop.describe_stop(result, RunOptions())
 
 
 def test_a_drop_counts_toward_the_plateau():
@@ -117,7 +117,21 @@ def test_plateau_settings_are_configurable():
     h = Harness([6.0, 6.2, 6.4, 6.6, 6.8])
     assert h.run(plateau_delta=0.1, max_rounds=4).stop_reason == StopReason.max_rounds
     h = Harness([6.0, 6.2, 6.4])
-    assert h.run(plateau_rounds=1).stop_reason == StopReason.plateau
+    assert h.run(plateau_rounds=1, plateau_delta=0.3).stop_reason == StopReason.plateau
+
+
+def test_small_real_gains_keep_the_loop_going():
+    # Per-bullet scoring moves the total by tenths; two +0.15 rounds are progress, not a plateau.
+    h = Harness([6.0, 6.15, 6.3, 9.1])
+    result = h.run()
+    assert result.stop_reason == StopReason.target_reached and result.best_round == 3
+
+
+def test_recovering_to_the_old_best_is_not_progress():
+    # A drop and a recovery to the earlier level: neither round beat the best (7.0), so stop.
+    h = Harness([7.0, 6.0, 7.0, 9.9])
+    result = h.run()
+    assert result.stop_reason == StopReason.plateau and len(h.revisions) == 2 and result.best_round == 0
 
 
 def test_plateaued_helper():
@@ -128,6 +142,7 @@ def test_plateaued_helper():
     assert not loop.plateaued(history(7.0, 7.1), 2, 0.3)             # not enough rounds yet
     assert loop.plateaued(history(7.0, 7.1, 7.2), 2, 0.3)
     assert not loop.plateaued(history(7.0, 7.1, 7.4), 2, 0.3)        # exactly delta is not "less than"
+    assert loop.plateaued(history(7.0, 6.5, 6.9), 2, 0.3)            # measured against the best, not the last round
 
 
 # ---------------------------------------------------------------------------
@@ -140,6 +155,19 @@ def test_the_best_draft_is_kept_when_a_later_round_scores_lower():
     result = h.run()
     assert result.best_round == 1 and result.best.skills == ["draft-1"]
     assert result.best_quality.total == 8.5 and result.stop_reason == StopReason.plateau
+
+
+def test_a_tie_goes_to_the_draft_that_uses_more_of_the_postings_language():
+    # Whole-number scores used to tie (5.80 -> 5.80 in a live run) and the first draft always won.
+    h = Harness([7.0, 7.0, 6.9, 6.9])
+    coverage = iter([40.0, 55.0, 70.0, 80.0])
+    first = loop.ValidationOutcome(resume=TailoredResume(skills=["draft-0"]))
+    result = run_revision_loop(first, judge_fn=h.judge_fn, quality_fn=h.quality_fn, revise_fn=h.revise_fn,
+                               options=RunOptions(), tiebreak_fn=lambda _draft: next(coverage))
+    assert result.best_round == 1 and result.best.skills == ["draft-1"]       # same total, more posting keywords
+    assert [r.tiebreak for r in result.history] == [40.0, 55.0, 70.0]
+    # Without a tiebreak function an exact tie keeps the earlier draft.
+    assert Harness([7.0, 7.0, 6.9, 6.9]).run().best_round == 0
 
 
 def test_only_rewrite_fixes_are_passed_to_the_reviser_and_violations_accumulate():
