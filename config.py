@@ -106,8 +106,14 @@ WEB_SEARCH_COST_PER_SEARCH = 0.01   # $10 per 1,000 searches (estimate)
 # --------------------------------------------------------------------------
 TARGET_QUALITY = 9.0
 MAX_ROUNDS = 5
-PLATEAU_DELTA = 0.3
+# The loop stops when each of the last PLATEAU_ROUNDS rounds failed to beat the best
+# score so far by PLATEAU_DELTA. Rewording two or three bullets moves the per-bullet
+# averages by about 0.05-0.3, so the bar is set below that.
+PLATEAU_DELTA = 0.3          # TODO(problem 2): lower to 0.1 once the loop compares against the best round
 PLATEAU_ROUNDS = 2
+# Two drafts whose totals differ by less than this are a tie; the draft that uses more
+# of the posting's keywords (Keyword Coverage) wins it, and an exact tie keeps the earlier one.
+TIE_EPSILON = 0.005
 
 # --------------------------------------------------------------------------
 # Scoring
@@ -120,6 +126,10 @@ QUALITY_WEIGHTS = {
     "language": 0.15,    # truthful use of the posting's language  (judge)
 }
 JUDGED_CATEGORIES = ("impact", "relevance", "clarity", "language")
+# Share of each judged category that comes from the average of the judge's per-bullet
+# scores (the rest is its whole-resume score). Relevance leans on the whole-resume view
+# because it is also about what was left out and in what order.
+JUDGE_BULLET_SHARE = {"impact": 0.6, "relevance": 0.4, "clarity": 0.6, "language": 0.6}
 
 # Job Match: how well *I* cover the job (never changes with rewriting).
 JOB_MATCH_WEIGHTS = {"required_skills": 0.55, "preferred_skills": 0.15, "eligibility": 0.30}

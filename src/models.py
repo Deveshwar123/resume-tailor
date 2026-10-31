@@ -823,7 +823,7 @@ class BulletFixBatch(BaseModel):
 
 
 class CategoryScore(BaseModel):
-    score: int                       # 1-10 (clamped in code)
+    score: float                     # 1-10, one decimal allowed (clamped in code)
     justification: str
 
 
@@ -832,6 +832,22 @@ class CategoryScores(BaseModel):
     relevance: CategoryScore
     clarity: CategoryScore
     language: CategoryScore
+
+
+class BulletScore(BaseModel):
+    """The judge's scores for one numbered bullet, judged on that bullet alone.
+
+    Whole-resume category scores rarely move when two or three bullets are
+    reworded, so a real improvement looked like a tie. Code averages these
+    per-bullet scores into the categories (scoring.quality), so every
+    reworded bullet moves the total a little.
+    """
+
+    bullet: int                      # the number shown before the bullet: [1], [2], ...
+    impact: int                      # 1-10
+    relevance: int
+    clarity: int
+    language: int
 
 
 class Fix(BaseModel):
@@ -845,6 +861,7 @@ class Judgment(BaseModel):
     """Wire model: the judge returns category scores and fixes. Never a total."""
 
     category_scores: CategoryScores
+    bullet_scores: list[BulletScore]
     fixes: list[Fix]
 
     def fixes_of(self, fix_type: FixType) -> list[Fix]:
@@ -856,6 +873,7 @@ class QualityScore(BaseModel):
     categories: dict[str, float] = Field(default_factory=dict)
     weights: dict[str, float] = Field(default_factory=dict)
     ats_final: bool = False                    # True once ATS was scored on the real PDF
+    bullets_scored: int = 0                    # bullets whose per-bullet scores entered the categories
 
 
 class JobMatch(BaseModel):
@@ -893,6 +911,7 @@ class RoundRecord(BaseModel):
     quality: QualityScore
     judgment: Judgment
     note: str = ""
+    tiebreak: float = 0.0            # Keyword Coverage of the draft; decides between equal totals
 
 
 class LoopResult(BaseModel):

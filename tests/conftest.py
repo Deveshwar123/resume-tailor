@@ -363,6 +363,7 @@ def make_judgment(impact: int = 8, relevance: int = 8, clarity: int = 8, languag
     return Judgment.model_validate({
         "category_scores": {"impact": cat(impact), "relevance": cat(relevance),
                             "clarity": cat(clarity), "language": cat(language)},
+        "bullet_scores": [],
         "fixes": [{"type": t, "target": target, "detail": detail, "expected_gain": gain}
                   for t, target, detail, gain in (fixes or [])],
     })
