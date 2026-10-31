@@ -137,9 +137,19 @@ def test_date_formatting_and_sort_keys():
 # ---------------------------------------------------------------------------
 
 
-def test_shipped_data_files_validate():
-    master = store.load_master_resume()
-    status = store.load_skills_status()
+EXAMPLE_MASTER = config.ROOT / "master_resume.example.yaml"
+EXAMPLE_STATUS = config.ROOT / "skills_status.example.yaml"
+
+
+@pytest.mark.parametrize("master_path,status_path", [
+    (EXAMPLE_MASTER, EXAMPLE_STATUS),                                 # shipped with the repo
+    (config.MASTER_RESUME_PATH, config.SKILLS_STATUS_PATH),          # my own copies, when they exist (gitignored)
+], ids=["examples", "personal"])
+def test_shipped_data_files_validate(master_path, status_path):
+    if not master_path.exists() or not status_path.exists():
+        pytest.skip(f"{master_path.name} is not present (a fresh clone has only the example files)")
+    master = store.load_master_resume(master_path)
+    status = store.load_skills_status(status_path)
     assert master.contact.name and master.education
     assert status.names_with(SkillStatus.verified)
     # Every skill tagged on a fact must be verified, or bullets naming it get rejected.
@@ -367,6 +377,9 @@ def test_unavailable_model_lists_what_is_available():
 
 def test_startup_without_api_needs_no_key(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "ENV_PATH", tmp_path / ".env")
+    # The shipped examples, so the test passes on a fresh clone without my personal files.
+    monkeypatch.setattr(config, "MASTER_RESUME_PATH", EXAMPLE_MASTER)
+    monkeypatch.setattr(config, "SKILLS_STATUS_PATH", EXAMPLE_STATUS)
     session = startup.run_startup(need_api=False, quiet=True)
     assert session.llm is None and session.master.experience
 
