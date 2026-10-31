@@ -10,6 +10,12 @@ the cited facts do not support. My education entry is also accepted as evidence
     soft flag       -> I approve, edit, or remove it (removed automatically in batch mode)
     company claims  -> must be grounded in the posting or official / posting-tier research
 
+Prose needs linking sentences ("I would welcome the chance to contribute to your
+team"). Wording that only states an intention, or that describes what the role
+asks for in the posting's own words, is not read as a claim about me (see
+`validate.connective_spans`); numbers, skills, tools, and names are checked
+everywhere.
+
 A cover letter is prose, and no validator catches everything: read it before sending.
 """
 
@@ -177,7 +183,11 @@ def check_sentence(text: str, about: str, fact_ids: list[str], ctx: ValidationCo
     if ctx.analysis is not None:
         extra += [ctx.analysis.company, ctx.analysis.role, ctx.analysis.location]
     evidence.texts = [*evidence.texts, *[e for e in extra if e]]
-    for violation in validate.check_bullet(text, evidence, ctx, entry.id, None):
+    # Linking wording ("the chance to contribute to your team") is not a claim; numbers, skills,
+    # tools, and names are still checked on the whole sentence.
+    company = ctx.analysis.company if ctx.analysis is not None else ""
+    connective = validate.Connective(validate.connective_spans(text, company), " ".join(company_sources))
+    for violation in validate.check_bullet(text, evidence, ctx, entry.id, None, connective=connective):
         if violation.code == "C3":
             continue                      # a letter does not have to repeat every metric
         if violation.code == "B3" and "drops the helper wording" in violation.message and not facts:

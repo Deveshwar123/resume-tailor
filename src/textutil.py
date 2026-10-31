@@ -467,12 +467,37 @@ def phrases_in(text: str, phrases: Iterable[str]) -> set[str]:
 def stems_in(text: str, stems: Iterable[str]) -> set[str]:
     """Which verb stems appear in any inflection ("improve" matches "improved")."""
     source = plain(text)
-    found = set()
-    for stem in stems:
-        forms = "|".join(re.escape(f) for f in _regular_forms(stem))
-        if re.search(r"(?<![A-Za-z])(?:" + forms + r")(?![A-Za-z])", source, re.IGNORECASE):
-            found.add(stem)
-    return found
+    return {stem for stem in stems if _stem_regex(stem).search(source)}
+
+
+@lru_cache(maxsize=512)
+def _stem_regex(stem: str) -> re.Pattern[str]:
+    forms = "|".join(re.escape(f) for f in _regular_forms(stem))
+    return re.compile(r"(?<![A-Za-z])(?:" + forms + r")(?![A-Za-z])", re.IGNORECASE)
+
+
+def phrase_spans(text: str, phrase: str) -> list[tuple[int, int]]:
+    """Character spans of `phrase` in `text`, matched the way `phrases_in` matches it."""
+    return [m.span() for m in _phrase_regex(phrase).finditer(plain(text))]
+
+
+def stem_spans(text: str, stem: str) -> list[tuple[int, int]]:
+    """Character spans of any inflection of `stem` in `text`, matched the way `stems_in` matches it."""
+    return [m.span() for m in _stem_regex(stem).finditer(plain(text))]
+
+
+def ownership_spans(text: str, lemma: str) -> list[tuple[int, int]]:
+    """Character spans where the ownership-lexicon `lemma` (as returned by `ownership_terms`) is used."""
+    source = plain(text)
+    spans: list[tuple[int, int]] = []
+    for name, _form, _tier, regex, excluded in _ownership_patterns():
+        if name != lemma:
+            continue
+        for m in regex.finditer(source):
+            following = re.match(r"\s+([A-Za-z]+)", source[m.end():])
+            if not (excluded and following and following.group(1).lower() in excluded):
+                spans.append(m.span())
+    return spans
 
 
 _STOPWORDS = {

@@ -99,6 +99,80 @@ def test_company_statements_must_be_grounded(ctx):
     assert any(v.code == "B2" for v in check(ctx, "My Kubernetes experience fits Acme well.", "company"))
 
 
+# ---------------------------------------------------------------------------
+# Connective language: linking sentences are not claims, and nothing else is relaxed
+# ---------------------------------------------------------------------------
+
+ROLE_POSTING = SAMPLE_POSTING + "\nYou will learn the systems and technology behind financial services.\n"
+
+
+@pytest.fixture
+def letter_ctx(master, status):
+    from src.validate import ValidationContext
+    from tests.conftest import make_analysis
+
+    analysis = make_analysis(preferred_skills=[{"name": "financial services", "weight": 2, "kind": "domain"}])
+    return ValidationContext(master=master, status=status, analysis=analysis)
+
+
+@pytest.mark.parametrize("text", [
+    # Both were removed from real letters in batch mode ("contribute" as ownership, "system" as complexity).
+    "I would welcome the chance to discuss how I can contribute to your team.",
+    "That work gave me practice with the analysis and systems thinking this internship calls for.",
+    # The same kinds of linking wording.
+    "I look forward to contributing to your data pipelines.",
+    "I am eager to build reliable systems with your team.",
+    "I am a Computer Science student at State University, and that mix of technology and financial services "
+    "is what draws me to this role.",
+])
+def test_linking_sentences_are_not_claims(letter_ctx, text):
+    assert cover_letter.check_sentence(text, "me", [], letter_ctx, [ROLE_POSTING]) == []
+
+
+@pytest.mark.parametrize("text,facts,code,severity", [
+    # A first-person claim inside the intent wording turns it back into a claim.
+    ("I am eager to apply my experience building scalable systems.", ["exp_acme_f01"], "C1", Severity.soft),
+    ("I am excited to keep leading teams of engineers.", [], "B3", Severity.hard),
+    ("I would welcome the chance to discuss the systems I built at Acme Corp.", ["exp_acme_f01"], "B3", Severity.soft),
+    # Numbers, named skills and tools are checked everywhere, linking wording or not.
+    ("I would welcome the chance to lead a 40-person team.", [], "B1", Severity.hard),
+    ("I hope to bring my Kubernetes expertise to your team.", [], "B2", Severity.hard),
+    ("I look forward to applying PyTorch to your models.", [], "B2", Severity.hard),
+    # A posting term used as a claim about me is still flagged.
+    ("I have experience in financial services.", [], "B2", Severity.soft),
+    # Role wording excuses only the posting's own words: "scalable" is not in this posting.
+    ("The scalable systems this role calls for are what I want to learn.", [], "C1", Severity.soft),
+])
+def test_claims_inside_letters_are_still_checked(letter_ctx, text, facts, code, severity):
+    found = {(v.code, v.severity) for v in cover_letter.check_sentence(text, "me", facts, letter_ctx, [ROLE_POSTING])}
+    assert (code, severity) in found
+
+
+def test_connective_spans_mark_intent_and_role_wording():
+    from src.validate import connective_spans
+
+    text = "I would welcome the chance to contribute to your trading systems."
+    kinds = {(text[s.start:s.end], s.kind) for s in connective_spans(text)}
+    assert ("chance to contribute to your trading systems", "intent") in kinds
+    assert ("trading systems", "role") in kinds
+    assert connective_spans("I would welcome the chance to grow my Python work.") == []        # "my": a claim
+    assert connective_spans("I built the systems Acme Corp needed.", "Acme Corp") == []
+
+
+def test_resume_bullets_are_checked_exactly_as_before(ctx):
+    """Connective spans are a cover-letter feature; a bullet never gets them."""
+    from src import validate
+
+    entry, fact = ctx.facts["exp_acme_f01"]
+    evidence = validate.gather_evidence(entry, [fact], None)
+    codes = {v.code for v in validate.check_bullet("Eager to build scalable systems for your team", evidence, ctx)}
+    assert {"B3", "C1"} <= codes
+    # The idiom list applies everywhere: "systems thinking" is not a complexity claim.
+    codes = {v.code for v in validate.check_bullet(
+        "Assisted a 4-person team in developing a Python application, applying systems thinking", evidence, ctx)}
+    assert "C1" not in codes
+
+
 def test_hard_failures_get_one_retry_then_the_sentence_is_removed(ctx):
     draft = letter(
         ("At Acme Corp, I assisted a 4-person team in developing a Python application.", "me", ["exp_acme_f01"]),
@@ -174,7 +248,8 @@ def test_cover_letter_end_to_end(master, status, workspace):
         [("At Acme Corp, I assisted a 4-person team in developing a Python application.", "me", ["exp_acme_f01"]),
          ("I also wrote SQL queries that reduced report generation time by 30%.", "me", ["exp_acme_f02"]),
          ("I am an expert in Kubernetes.", "me", [])],
-        [("I would welcome the chance to talk about the role.", "other", [])],
+        [("I would welcome the chance to talk about the role.", "other", []),
+         ("I would welcome the chance to contribute to your team.", "me", [])],
     ])
     llm = ScriptedLLM({"analyze": [make_extract()], "tailor": [DRAFT], "judge": [make_judgment(9, 9, 9, 9)],
                        "cover_letter": [draft], "fix": [SentenceFixBatch(fixes=[])]})
@@ -188,6 +263,8 @@ def test_cover_letter_end_to_end(master, status, workspace):
     assert "reduced report generation time by 30%" in text and "Dear Hiring Manager," in text
     assert "| I am an expert in Kubernetes. | me | - | removed |" in text                # listed, but not in the letter
     assert "Kubernetes" not in " ".join(state.cover_letter.paragraphs()) and state.cover_letter.pages == 1
+    # Batch mode removes flagged sentences, and a linking sentence is no longer flagged.
+    assert "the chance to contribute to your team." in " ".join(state.cover_letter.paragraphs())
     index = json.loads((out / "archive.json").read_text())
     assert index["files"]["cover_letter_pdf"] == "cover_letter.pdf"
     assert any("Kubernetes" in v.message for v in state.violations)                      # logged with the resume's violations

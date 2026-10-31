@@ -220,9 +220,161 @@ def _join_facts(facts: list[Fact]) -> str:
     return "; ".join(f.text.rstrip(". ") for f in facts)
 
 
+# ---------------------------------------------------------------------------
+# Connective language in prose (cover letters)
+# ---------------------------------------------------------------------------
+#
+# A cover letter links its claims with sentences such as "I would welcome the
+# chance to contribute to your team" or "the analysis and systems thinking this
+# internship calls for". Word lists cannot tell those apart from claims, so the
+# letter's linking sentences used to be flagged ("contribute" as an ownership
+# claim, "systems" as a complexity claim) and removed when no one could approve
+# them. The spans below mark the two kinds of wording that state nothing about
+# the candidate's past:
+#
+#   intent  a statement of what the candidate wants to do ("the chance to ...",
+#           "eager to ...", "look forward to ..."). Ownership, scope,
+#           complexity, and result words in it are not claims.
+#   role    words that describe the employer or what the role asks for ("your
+#           trading systems", "... this internship calls for", "... is what
+#           draws me to this role"). Scope, complexity, and result words and the
+#           posting's own terms in it are not claims, but only when the posting
+#           (or trusted research) uses the same word; ownership is never excused.
+#
+# Numbers (B1), named skills and tools (B2), and new names are checked on the
+# whole sentence whatever the spans say, and a span that carries a first-person
+# claim ("eager to apply MY experience building ...", "the systems I BUILT")
+# excuses nothing.
+
+_INTENT_MARKER_RE = re.compile(
+    r"\b(?:(?:chance|opportunity|occasion)\s+to"
+    r"|(?:eager|excited|keen|hope|hoping|want|wanting|ready|glad|happy|aim|aiming|plan|planning|intend|intending"
+    r"|would\s+(?:like|love))\s+to"
+    r"|look(?:ing)?\s+forward\s+to|interested\s+in)\b",
+    re.IGNORECASE)
+_CLAUSE_END_RE = re.compile(
+    r"[.;:!?,]|\b(?:and|but|because|since|so|while|whereas|as)\s+(?:I|my|we|our)\b", re.IGNORECASE)
+# Inside an intent span, these turn it back into a claim about the past or about what the candidate has.
+_INTENT_CLAIM_RE = re.compile(
+    r"\b(?:my|mine)\b|\bI(?:'ve|\s+have|\s+had)\b|\b(?:continue|continuing|keep|keeping|again|already)\b"
+    r"|\bI\s+(?!(?:can|could|would|will|might|may|should|hope|want|plan|aim|am)\b)[A-Za-z]+",
+    re.IGNORECASE)
+_FIRST_PERSON_RE = re.compile(r"\b(?:I|I'm|I've|I'd|my|me|mine|myself)\b", re.IGNORECASE)
+_ROLE_NOUNS = r"(?:internship|role|position|job|team|program|posting|firm|company|group)"
+_ROLE_ASKS_RE = re.compile(
+    r"\b(?:that\s+|which\s+)?(?:this|the|your)\s+" + _ROLE_NOUNS + r"\s+"
+    r"(?:calls?\s+for|requires?|asks?\s+for|needs?|demands?|emphasi[sz]es|values?|describes?|mentions?"
+    r"|involves?|focuses\s+on|centers\s+on|looks?\s+for|is\s+looking\s+for|offers?)\b",
+    re.IGNORECASE)
+_DRAWS_ME_RE = re.compile(
+    r"\b(?:(?:is|are)\s+what\s+(?:draws|drew|attracts|attracted|excites|excited|interests|interested)\s+me"
+    r"|(?:draws|drew|attracts|attracted|excites|excited)\s+me\s+(?:to|about))\b",
+    re.IGNORECASE)
+# Where a noun phrase that the role "calls for" begins: after the last preposition or verb before it.
+_NP_START_RE = re.compile(
+    r"[.,;:!?]|\b(?:with|in|of|for|on|to|about|into|is|are|was|were|gave|give|gives|bring|brings|build|builds)\b",
+    re.IGNORECASE)
+_NP_STOP_WORDS = {"of", "in", "on", "at", "for", "with", "to", "and", "or", "that", "which", "where", "who",
+                  "from", "by", "as", "is", "are"}
+
+
+@dataclass(frozen=True)
+class Span:
+    start: int
+    end: int
+    kind: str                        # "intent" | "role"
+
+
+@dataclass
+class Connective:
+    """Connective spans of one prose sentence and the text that may excuse words in role spans."""
+
+    spans: list[Span]
+    sources: str = ""                # the posting and trusted research, joined
+
+    def excuses(self, text: str, hits: list[tuple[int, int]], *, ownership: bool = False) -> bool:
+        """True when every hit lies in a span that excuses it (see the module notes above)."""
+        if not hits:
+            return False
+        for start, end in hits:
+            span = next((s for s in self.spans if s.start <= start and end <= s.end), None)
+            if span is None:
+                return False
+            if span.kind == "role":
+                word = text[start:end]
+                if ownership or not textutil.phrase_spans(self.sources, word):
+                    return False
+        return True
+
+
+def _clause_end(text: str, start: int) -> int:
+    match = _CLAUSE_END_RE.search(text, start)
+    return match.start() if match else len(text)
+
+
+def _np_before(text: str, end: int) -> int:
+    """Start of the noun phrase that ends at `end` (after the last preposition, verb, or punctuation)."""
+    start = 0
+    for match in _NP_START_RE.finditer(text, 0, end):
+        start = match.end()
+    return start
+
+
+def connective_spans(text: str, company: str = "") -> list[Span]:
+    """Intent and role spans in one prose sentence. Pure; see the notes above."""
+    spans: list[Span] = []
+    for marker in _INTENT_MARKER_RE.finditer(text):
+        end = _clause_end(text, marker.end())
+        if not _INTENT_CLAIM_RE.search(text, marker.end(), end):
+            spans.append(Span(marker.start(), end, "intent"))
+
+    def add_role(start: int, end: int) -> None:
+        while start < end and text[start] == " ":
+            start += 1
+        if end > start and not _FIRST_PERSON_RE.search(text, start, end):
+            spans.append(Span(start, end, "role"))
+
+    # The employer's own things: "your trading systems", "Aquatic's research platform".
+    owners = [r"your", r"(?:the\s+)?(?:team|firm|company|group|role|internship|position)'s"]
+    if company.strip():
+        owners.append(re.escape(company.strip()) + r"'s")
+    for match in re.finditer(r"\b(?:" + "|".join(owners) + r")\s+", text, re.IGNORECASE):
+        end = cursor = match.end()
+        for word in re.finditer(r"[A-Za-z][\w/-]*", text[cursor:]):
+            between = text[end:cursor + word.start()]
+            if word.group(0).lower() in _NP_STOP_WORDS or re.search(r"[.,;:!?]", between) or word.start() > 60:
+                break
+            end = cursor + word.end()
+        add_role(match.end(), end)
+    # What the role asks for: "the analysis and systems thinking this internship calls for".
+    for match in _ROLE_ASKS_RE.finditer(text):
+        add_role(_np_before(text, match.start()), match.start())
+    # What draws the candidate to it: "that mix of technology and financial services is what draws me to this role".
+    for match in _DRAWS_ME_RE.finditer(text):
+        start = 0
+        for stop in re.finditer(r"[.,;:!?](?:\s+(?:and|but|so))?", text[:match.start()]):
+            start = stop.end()
+        add_role(start, match.start())
+    return spans
+
+
+def _without_idioms(text: str) -> str:
+    """Blank out COMPLEXITY_IDIOMS, keeping every other character where it was."""
+    for idiom in config.COMPLEXITY_IDIOMS:
+        text = re.sub(r"(?<![A-Za-z])" + re.escape(idiom) + r"(?![A-Za-z])", lambda m: " " * len(m.group(0)),
+                      text, flags=re.IGNORECASE)
+    return text
+
+
 def check_bullet(text: str, ev: Evidence, ctx: ValidationContext,
-                 entry_id: str = "", index: int | None = None) -> list[Violation]:
-    """All B and C checks for one bullet. Pure: returns violations, changes nothing."""
+                 entry_id: str = "", index: int | None = None,
+                 connective: Connective | None = None) -> list[Violation]:
+    """All B and C checks for one bullet. Pure: returns violations, changes nothing.
+
+    `connective` (cover letters only) marks wording that states nothing about
+    the candidate's past; see "Connective language in prose" above. Resume
+    bullets never pass it, so their checks are unchanged.
+    """
     if is_verbatim(text, ev):
         return []
     out: list[Violation] = []
@@ -230,6 +382,9 @@ def check_bullet(text: str, ev: Evidence, ctx: ValidationContext,
     def add(code: str, severity: Severity, message: str, token: str = "") -> None:
         out.append(Violation(code=code, severity=severity, entry_id=entry_id or ev.entry.id,
                              bullet_index=index, message=message, token=token))
+
+    def excused(hits: list[tuple[int, int]], *, ownership: bool = False) -> bool:
+        return connective is not None and connective.excuses(text, hits, ownership=ownership)
 
     evidence_text = ev.joined
     years = textutil.years_in(ev.entry.dates.start, ev.entry.dates.end)
@@ -257,7 +412,7 @@ def check_bullet(text: str, ev: Evidence, ctx: ValidationContext,
         judged_surfaces.append(surface)
         supported = (canonical in ev.skill_tags or textutil.contains_term(evidence_text, canonical)
                      or loosely_supported(canonical, evidence_text))
-        if not supported:
+        if not supported and not excused(textutil.term_spans(text, canonical)):
             add("B2", Severity.soft, f'uses the posting\'s term "{surface}", which the cited facts do not mention', surface)
     judged = textutil.squash(" ".join(judged_surfaces))
     for token in textutil.new_proper_nouns(text, [*ev.texts, *ev.header]):
@@ -266,7 +421,8 @@ def check_bullet(text: str, ev: Evidence, ctx: ValidationContext,
 
     # B3 - ownership.
     evidence_verbs = textutil.ownership_terms(evidence_text)
-    bullet_verbs = textutil.ownership_terms(text)
+    bullet_verbs = {lemma: tier for lemma, tier in textutil.ownership_terms(text).items()
+                    if not excused(textutil.ownership_spans(text, lemma), ownership=True)}
     for lemma, tier in bullet_verbs.items():
         word = lemma.removeprefix("noun:")
         if lemma not in evidence_verbs:
@@ -290,21 +446,29 @@ def check_bullet(text: str, ev: Evidence, ctx: ValidationContext,
 
     # B4 - scope inflation.
     for word in sorted(textutil.phrases_in(text, config.SCOPE_WORDS) - textutil.phrases_in(evidence_text, config.SCOPE_WORDS)):
-        add("B4", Severity.soft, f'adds the scope word "{word}", which is not in the cited facts', word)
+        if not excused(textutil.phrase_spans(text, word)):
+            add("B4", Severity.soft, f'adds the scope word "{word}", which is not in the cited facts', word)
 
-    # C1 - technical complexity.
-    def singular(found: set[str]) -> set[str]:
-        return {w[:-1] if w.endswith("s") and len(w) > 4 else w for w in found}
+    # C1 - technical complexity ("systems thinking" and the other idioms are not complexity claims).
+    def singular(word: str) -> str:
+        return word[:-1] if word.endswith("s") and len(word) > 4 else word
 
-    for word in sorted(singular(textutil.phrases_in(text, config.COMPLEXITY_WORDS))
-                       - singular(textutil.phrases_in(evidence_text, config.COMPLEXITY_WORDS))):
-        add("C1", Severity.soft, f'adds technical-complexity wording ("{word}")', word)
+    plain_text = _without_idioms(text)
+    in_text: dict[str, list[str]] = {}
+    for phrase in textutil.phrases_in(plain_text, config.COMPLEXITY_WORDS):
+        in_text.setdefault(singular(phrase), []).append(phrase)
+    in_evidence = {singular(p) for p in textutil.phrases_in(_without_idioms(evidence_text), config.COMPLEXITY_WORDS)}
+    for word in sorted(set(in_text) - in_evidence):
+        if not excused([hit for phrase in in_text[word] for hit in textutil.phrase_spans(plain_text, phrase)]):
+            add("C1", Severity.soft, f'adds technical-complexity wording ("{word}")', word)
 
     # C2 - results wording.
-    new_results = (textutil.stems_in(text, config.RESULT_WORDS) - textutil.stems_in(evidence_text, config.RESULT_WORDS)) | (
-        textutil.phrases_in(text, config.RESULT_PHRASES) - textutil.phrases_in(evidence_text, config.RESULT_PHRASES))
-    for word in sorted(new_results):
-        add("C2", Severity.soft, f'adds result wording ("{word}")', word)
+    new_stems = textutil.stems_in(text, config.RESULT_WORDS) - textutil.stems_in(evidence_text, config.RESULT_WORDS)
+    new_phrases = textutil.phrases_in(text, config.RESULT_PHRASES) - textutil.phrases_in(evidence_text, config.RESULT_PHRASES)
+    for word in sorted(new_stems | new_phrases):
+        hits = textutil.stem_spans(text, word) if word in new_stems else textutil.phrase_spans(text, word)
+        if not excused(hits):
+            add("C2", Severity.soft, f'adds result wording ("{word}")', word)
 
     # C3 - a metric the cited fact carries was dropped.
     present = {a.key() for a in textutil.numeric_atoms(text)}

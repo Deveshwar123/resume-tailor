@@ -352,6 +352,9 @@ COMPLEXITY_WORDS = [
     "databases", "microservices", "cloud", "neural", "system", "systems", "architecture",
     "state-of-the-art", "cutting-edge", "proprietary", "novel",
 ]
+# Fixed phrases that contain a complexity word but make no technical claim ("systems
+# thinking" is a way of reasoning, not a system that was built). C1 ignores them.
+COMPLEXITY_IDIOMS = ["systems thinking", "role model", "business model"]
 RESULT_WORDS = [
     "improve", "increase", "reduce", "decrease", "boost", "grow", "save", "cut",
     "accelerate", "achieve", "deliver", "drive", "generate", "raise", "win", "earn",
