@@ -110,6 +110,29 @@ python tailor.py --check                       # startup checks only
 | `--find "Company"` | List archived runs whose company or role matches. |
 | `--check` | Run the startup checks and exit. |
 
+### No-prompt mode (`--auto`, for apps)
+
+```bash
+python tailor.py <job_url> --auto --out out/acme      # or --text job.txt
+```
+
+```python
+from tailor import tailor_for_job
+result = tailor_for_job("https://job-boards.greenhouse.io/acme/jobs/123", "out/acme",
+                        master_path=None, skills_path=None, data_dir=None)
+result["files"]["resume_pdf"], result["files"]["cover_letter_pdf"], result["scores"]
+```
+
+Nothing ever waits for a person: prompts return their default, there is no interview, and a
+blocked link is an error instead of a paste prompt. A rewrite is used only if the validator raised
+nothing; anything a check flagged goes back to your approved wording, and a flagged cover-letter
+sentence is removed. The cover letter and `report.json` are always written to the output folder.
+On an expected failure (blocked link, usage limit, bad data file) it returns `{"ok": False,
+"error": ..., "hint": ...}` instead of raising. `master_path`, `skills_path` and `data_dir` point a
+run at other data (tests, other people) without touching yours. What `--auto` gives up is your
+look at substantial rewordings, so read the resume before you send it. Job Agent uses this to
+upload a tailored resume with each application.
+
 ### What a run produces
 
 `output/<Company>_<Role>_<YYYY-MM-DD>/`

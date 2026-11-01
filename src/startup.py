@@ -113,13 +113,17 @@ def make_llm(env: dict[str, str]):
 
 
 def run_startup(*, need_api: bool = True, verify_models: bool = True, quiet: bool = False,
-                test_call: bool = False) -> Session:
+                test_call: bool = False, paths: dict[str, str | os.PathLike | None] | None = None) -> Session:
     """Run every startup check in order and return the session.
 
     `need_api=False` is used by commands that never call Claude
-    (`--insights`, `--find`), so they work without a key.
+    (`--insights`, `--find`), so they work without a key. `paths` (keys
+    master, skills, data_dir) point the run at other data; they win over the
+    TAILOR_* environment variables.
     """
     env = load_env()
+    if paths:
+        config.use_paths(master=paths.get("master"), skills=paths.get("skills"), data_dir=paths.get("data_dir"))
 
     master = store.load_master_resume()
     skills_status = store.load_skills_status()

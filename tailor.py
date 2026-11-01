@@ -9,6 +9,8 @@
     python tailor.py <job_url> --max-rounds 5 --target 9.0
     python tailor.py <job_url> --cover-letter   also draft a cover letter from the same facts
     python tailor.py --batch links.txt          run many postings without prompts
+    python tailor.py <job_url> --auto [--out D] no prompts at all: validator-clean rewrites, cover
+                                                letter and report.json in D (for apps; see src/auto.py)
     python tailor.py --insights                 regenerate the application dashboard
     python tailor.py --find "Company"           look up archived submissions
     python tailor.py --check                    run the startup checks only
@@ -25,6 +27,7 @@ from pathlib import Path
 
 import config
 from src import ui
+from src.auto import tailor_for_job  # noqa: F401  (re-exported: `from tailor import tailor_for_job`)
 from src.errors import TailorError, UserAbort
 
 
@@ -44,6 +47,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help=f"Resume Quality target out of 10 (default {config.TARGET_QUALITY})")
     parser.add_argument("--cover-letter", action="store_true", help="also draft a cover letter from the same verified facts")
     parser.add_argument("--batch", metavar="FILE", help="file with one job link per line; runs without prompts")
+    parser.add_argument("--auto", action="store_true",
+                        help="never prompt: use only validator-clean rewrites, always write the cover letter and report.json")
+    parser.add_argument("--out", metavar="DIR", help="with --auto: write every file to this folder")
     parser.add_argument("--insights", action="store_true", help="regenerate the application intelligence dashboard")
     parser.add_argument("--find", metavar="COMPANY", help="list archived submissions matching a company name")
     parser.add_argument("--check", action="store_true", help="run startup checks (key, models, data files) and exit")
@@ -101,6 +107,20 @@ def dispatch(args: argparse.Namespace, parser: argparse.ArgumentParser) -> int:
             raise TailorError(f"{path} contains no links.")
         session = startup.run_startup(need_api=True)
         return loop.run_batch(session, urls, _options(args, batch=True))
+
+    if args.auto:
+        import json
+
+        from src import auto
+
+        if not (args.job_url or args.text):
+            raise TailorError("--auto needs a job link or --text FILE.")
+        if args.text and not Path(args.text).exists():
+            raise TailorError(f"Job description file not found: {args.text}")
+        source = args.job_url or Path(args.text).read_text(encoding="utf-8")
+        result = auto.tailor_for_job(source, Path(args.out) if args.out else auto.default_out_dir())
+        print(json.dumps({k: result.get(k) for k in ("ok", "out_dir", "files", "scores", "error")}, indent=2, default=str))
+        return 0 if result.get("ok") else 1
 
     if args.job_url or args.text:
         from src import loop
