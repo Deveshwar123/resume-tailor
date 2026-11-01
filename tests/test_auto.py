@@ -40,7 +40,7 @@ def test_link_runs_with_auto_options_and_returns_the_report(fake_run, tmp_path):
     assert result["ok"] and result["files"]["resume_pdf"].endswith("resume.pdf")
     assert fake_run["url"] == "https://job-boards.greenhouse.io/acme/jobs/1" and fake_run["posting_text"] is None
     opts = fake_run["options"]
-    assert (opts.auto, opts.interview, opts.cover_letter) == (True, False, True)
+    assert (opts.auto, opts.interview, opts.cover_letter, opts.max_rounds) == (True, False, True, auto.AUTO_MAX_ROUNDS)
     assert fake_run["paths"]["master"] == tmp_path / "m.yaml"
     assert (fake_run["interactive"], fake_run["answer"]) == (False, "default")
     assert config.use_paths() == before                        # paths restored afterwards

@@ -42,8 +42,15 @@ def default_out_dir() -> Path:
     return config.OUTPUT_DIR / "auto" / datetime.now().strftime("%Y-%m-%d_%H%M%S")
 
 
+# Live check (Aquatic SWE Intern, example data): rounds 5.60, 5.35, 5.96, 5.91, 5.88 - the best draft
+# came in round 2 and three more rounds added a minute without beating it. Apps wait on this per
+# application, so auto mode stops after two revision rounds unless told otherwise.
+AUTO_MAX_ROUNDS = 2
+
+
 def tailor_for_job(url_or_posting_text: str, out_dir: str | Path, master_path: str | Path | None = None,
-                   skills_path: str | Path | None = None, data_dir: str | Path | None = None) -> dict:
+                   skills_path: str | Path | None = None, data_dir: str | Path | None = None,
+                   max_rounds: int = AUTO_MAX_ROUNDS) -> dict:
     """Tailor a resume and cover letter for one posting without asking anything.
 
     `url_or_posting_text` is either a link (fetched once) or the posting's text.
@@ -74,7 +81,8 @@ def tailor_for_job(url_or_posting_text: str, out_dir: str | Path, master_path: s
     try:
         session = startup.run_startup(need_api=True, quiet=False,
                                       paths={"master": master_path, "skills": skills_path, "data_dir": data_dir})
-        options = loop.RunOptions(auto=True, interview=False, cover_letter=True, research=True)
+        options = loop.RunOptions(auto=True, interview=False, cover_letter=True, research=True,
+                                  max_rounds=max_rounds)
         loop.run_job(session, url=text if is_url else None, posting_text=None if is_url else text,
                      options=options, out_dir=out)
         return json.loads((out / "report.json").read_text(encoding="utf-8"))
