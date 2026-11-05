@@ -87,3 +87,33 @@ def test_an_unknown_id_in_your_resume_list_is_an_error(master_data):
     master_data["base_resume"] = ["exp_acme", "exp_nowhere"]
     with pytest.raises(pydantic.ValidationError, match="exp_nowhere"):
         MasterResume.model_validate(master_data)
+
+
+def test_pdf_conversions_never_run_at_the_same_time(tmp_path, monkeypatch):
+    """Job Agent tailors two jobs at once; LibreOffice on one shared profile drops the second."""
+    import subprocess
+    import threading
+    import time
+
+    running, most = [0], [0]
+
+    def fake_soffice(args, **kw):
+        running[0] += 1
+        most[0] = max(most[0], running[0])
+        time.sleep(0.05)
+        out_dir, docx = args[args.index("--outdir") + 1], args[-1]
+        (tmp_path / out_dir / (docx.rsplit("/", 1)[-1][:-5] + ".pdf")).write_bytes(b"%PDF")
+        running[0] -= 1
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    monkeypatch.setattr(render, "find_soffice", lambda: "soffice")
+    monkeypatch.setattr(render.subprocess, "run", fake_soffice)
+    docs = []
+    for name in ("a", "b", "c"):
+        (tmp_path / name).mkdir()
+        docs.append(tmp_path / name / "resume.docx")
+        docs[-1].write_bytes(b"docx")
+    threads = [threading.Thread(target=render.docx_to_pdf, args=(d,)) for d in docs]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    assert most[0] == 1 and all((d.parent / "resume.pdf").exists() for d in docs)

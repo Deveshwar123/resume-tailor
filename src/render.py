@@ -20,6 +20,7 @@ Every step is logged in the returned `FitResult`.
 
 from __future__ import annotations
 
+import fcntl
 import os
 import shutil
 import subprocess
@@ -384,11 +385,16 @@ def docx_to_pdf(docx: Path, out_dir: Path | None = None) -> Path:
         if fontconfig is not None:
             env["FONTCONFIG_FILE"] = str(fontconfig)
         try:
-            result = subprocess.run(
-                [soffice, f"-env:UserInstallation={profile.resolve().as_uri()}", "--headless",
-                 "--convert-to", "pdf", "--outdir", str(out_dir), str(docx)],
-                capture_output=True, text=True, timeout=config.PDF_CONVERT_TIMEOUT_SECONDS, env=env,
-            )
+            # One conversion at a time across processes: two LibreOffice runs on the same profile
+            # collide and the second writes nothing (seen live: Job Agent tailors two jobs at once,
+            # and one of each pair failed with "could not convert the resume to PDF: no output").
+            with open(config.CACHE_DIR / "soffice.lock", "w") as lock:
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                result = subprocess.run(
+                    [soffice, f"-env:UserInstallation={profile.resolve().as_uri()}", "--headless",
+                     "--convert-to", "pdf", "--outdir", str(out_dir), str(docx)],
+                    capture_output=True, text=True, timeout=config.PDF_CONVERT_TIMEOUT_SECONDS, env=env,
+                )
         except subprocess.TimeoutExpired as exc:
             raise RenderError("LibreOffice timed out converting the resume to PDF.") from exc
         if result.returncode != 0 or not pdf.exists():
