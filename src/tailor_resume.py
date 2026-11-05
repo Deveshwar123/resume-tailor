@@ -65,8 +65,7 @@ Writing each bullet
   - results (any form): {result_words}
 
 Choosing content
-- Pick the experiences, projects, and facts that best fit this job type: technical work for software roles, analytical and business work for finance roles, methodology and rigor for research roles, data handling and analysis for data roles.
-- The resume must fit on ONE page: select at most {target_bullets} bullets in total and at most {max_per_entry} per entry. Leave out content that does not help for this job.
+{choosing_rules}
 - Company research is graded by source: "heavy" items (the company's own pages and the posting) should shape emphasis; "light" items (news) may nudge it. Research changes what you emphasize, never what you claim.
 
 Filling the output
@@ -78,8 +77,23 @@ Filling the output
 - `honors`, `coursework`: items copied exactly from the education entry that are worth the space for this job (either may be empty).
 - `award_ids`: ids of awards worth including (may be empty).
 - `section_order`: the order of the sections for this job (education, experience, projects, leadership, skills, awards).
-- Layout is fixed by code: within a section, entries are always listed newest first, whatever order you return. Give the most relevant work its weight through which entries you include, how many bullets each gets, the order of its bullets, the wording, and the order of sections. Leave out entries that add little for this job (for example, a membership whose only fact is attending meetings) unless the page would otherwise be thin.
+- Layout is fixed by code: within a section, entries are always listed newest first, whatever order you return. {weight_rule}
 {mode_rules}"""
+
+CHOOSE_RULES = """- Pick the experiences, projects, and facts that best fit this job type: technical work for software roles, analytical and business work for finance roles, methodology and rigor for research roles, data handling and analysis for data roles.
+- The resume must fit on ONE page: select at most {target_bullets} bullets in total and at most {max_per_entry} per entry. Leave out content that does not help for this job."""
+
+CHOOSE_WEIGHT = ("Give the most relevant work its weight through which entries you include, how many bullets each gets, the "
+                 "order of its bullets, the wording, and the order of sections. Leave out entries that add little for this "
+                 "job (for example, a membership whose only fact is attending meetings) unless the page would otherwise be thin.")
+
+KEEP_RULES = """- The fact bank holds exactly the candidate's own resume. Keep ALL of it: every experience and project in the fact bank, and for each one, one bullet for every approved bullet ({bullet_count} bullets in total). Never leave an entry or an approved bullet out, never merge two approved bullets into one, and never add a bullet the resume does not have.
+- For each approved bullet, set `source_bullet_id` to its id and rewrite it for this posting: work in the posting's own keywords (`required_skills`, `key_phrases`, `responsibilities`) wherever the bullet's facts already show them, and lead with the part this role cares about most. The candidate wants their resume reworded for the job, not shortened.
+- Keep each rewrite about as long as the approved bullet (the whole resume already fills one page); a little longer only when it adds a posting keyword.
+- `skills`: list every skill the posting asks for that is in "allowed_skills" first, then the rest of the candidate's skills."""
+
+KEEP_WEIGHT = ("Give the most relevant work its weight through the order of its bullets, the wording, and the order of "
+               "sections; every entry stays.")
 
 NORMAL_RULES = """
 Mode: normal. Tailoring the wording is the main job.
@@ -115,6 +129,20 @@ FIX_USER = """These bullets failed validation against the fact bank. Rewrite eac
 # ---------------------------------------------------------------------------
 # Prompt building
 # ---------------------------------------------------------------------------
+
+
+def keeping(ctx: ValidationContext) -> bool:
+    """True when the master resume names your resume (`base_resume`): it is kept whole and reworded."""
+    return bool(ctx.master.base_resume)
+
+
+def base_entries(ctx: ValidationContext) -> list:
+    """The experiences and projects on your resume, in `base_resume` order."""
+    return [e for e in (ctx.master.entry(i) for i in ctx.master.base_resume) if e is not None]
+
+
+def approved_bullets(entry) -> list:
+    return [b for b in entry.bullets if b.approved]
 
 
 def allowed_skills(ctx: ValidationContext) -> list[str]:
@@ -160,8 +188,9 @@ def fact_bank(ctx: ValidationContext) -> dict:
         ],
         "allowed_skills": allowed_skills(ctx),
         "awards": [{"id": a.id, "text": a.text} for a in master.awards],
-        "experiences": [entry_block(e) for e in master.experience],
-        "projects": [entry_block(p) for p in master.projects],
+        # Keeping your resume: only its entries are shown, so nothing else can be picked.
+        "experiences": [entry_block(e) for e in master.experience if not keeping(ctx) or e.id in master.base_resume],
+        "projects": [entry_block(p) for p in master.projects if not keeping(ctx) or p.id in master.base_resume],
     }
 
 
@@ -194,9 +223,15 @@ def brief_block(brief: CompanyBrief | None) -> dict:
 
 def build_system(ctx: ValidationContext, brief: CompanyBrief | None = None) -> str:
     """The shared, cacheable system prompt for tailor / revise / fix / tighten."""
+    if keeping(ctx):
+        choosing = KEEP_RULES.format(bullet_count=sum(len(approved_bullets(e)) for e in base_entries(ctx)))
+        weight = KEEP_WEIGHT
+    else:
+        choosing = CHOOSE_RULES.format(target_bullets=config.TARGET_BULLETS, max_per_entry=config.MAX_BULLETS_PER_ENTRY)
+        weight = CHOOSE_WEIGHT
     rules = RULES.format(
-        target_bullets=config.TARGET_BULLETS,
-        max_per_entry=config.MAX_BULLETS_PER_ENTRY,
+        choosing_rules=choosing,
+        weight_rule=weight,
         mode_rules=STRICT_RULES if ctx.mode == Mode.strict else NORMAL_RULES,
         scope_words=", ".join(config.SCOPE_WORDS),
         complexity_words=", ".join(config.COMPLEXITY_WORDS),
@@ -343,6 +378,15 @@ def baseline_draft(ctx: ValidationContext, max_bullets: int | None = None) -> Ta
     budget = max_bullets or config.TARGET_BULLETS
     experiences: list[EntryDraft] = []
     projects: list[EntryDraft] = []
+    if keeping(ctx):            # your resume, word for word (validate.keep_base() fills it in)
+        for entry in base_entries(ctx):
+            draft = EntryDraft(source_id=entry.id, org=entry.display_org, title=entry.display_title,
+                               start=entry.dates.start, end=entry.dates.end,
+                               bullets=[BulletDraft(rewritten_text=b.text, fact_ids=list(b.fact_ids), source_bullet_id=b.id,
+                                                    change_type=ChangeType.unchanged, rationale="your wording")
+                                        for b in approved_bullets(entry)])
+            (experiences if entry.kind == "experience" else projects).append(draft)
+        budget = 0
     for entry in ctx.relevance.rank_entries(list(ctx.master.entries())):
         if budget <= 0:
             break

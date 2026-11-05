@@ -843,7 +843,59 @@ def enforce(draft: TailoredResumeDraft, ctx: ValidationContext, retry_fn: RetryF
         else:
             resume.award_ids.append(award_id)
     resume.section_order = _section_order(draft.section_order, resume, ctx)
+    if ctx.master.base_resume:
+        keep_base(resume, ctx)
     return ValidationOutcome(resume=resume, violations=violations, retried=retried)
+
+
+KEPT_NOTE = "kept from your resume (your wording)"
+
+
+def keep_base(resume: TailoredResume, ctx: ValidationContext) -> TailoredResume:
+    """Your resume, kept whole (`base_resume` in the master resume): every entry on it and one bullet
+    for every approved bullet of each. An entry the draft left out comes back with your wording, a
+    dropped bullet comes back word for word, an extra bullet or an entry not on your resume goes,
+    and every skill of `base_skills` that is verified is listed (after the AI's job matches).
+    Runs on every draft (first draft and each revision), so no step can cut your resume."""
+    master = ctx.master
+    for kind, target in (("experience", resume.experiences), ("project", resume.projects)):
+        target[:] = [e for e in target if e.source_id in master.base_resume]
+        have = {e.source_id: e for e in target}
+        for entry_id in master.base_resume:
+            entry = master.entry(entry_id)
+            if entry is None or entry.kind != kind:
+                continue
+            approved = [b for b in entry.bullets if b.approved]
+            built = have.get(entry_id)
+            if built is None:
+                if approved:
+                    built = TailoredEntry(source_id=entry.id, kind=kind, bullets=[_verified_bullet(b, None, KEPT_NOTE) for b in approved],
+                                          replaced=KEPT_NOTE)
+                else:
+                    built = verified_entry(entry, ctx, KEPT_NOTE, limit=max(1, len(entry.facts)))
+                target.append(built)
+                continue
+            if not approved:
+                continue
+            ids = {b.id for b in approved}
+            used: set[str] = set()
+            kept: list[TailoredBullet] = []
+            for bullet in built.bullets:
+                source = bullet.source_bullet_id if bullet.source_bullet_id in ids and bullet.source_bullet_id not in used else None
+                if source is None:      # written from facts: it stands for the approved bullet it shares facts with
+                    source = next((b.id for b in approved if b.id not in used and set(b.fact_ids) & set(bullet.fact_ids)), None)
+                if source is None:
+                    continue            # a bullet your resume doesn't have
+                used.add(source)
+                bullet.source_bullet_id = source
+                kept.append(bullet)
+            kept += [_verified_bullet(b, None, KEPT_NOTE) for b in approved if b.id not in used]
+            built.bullets = kept
+    for skill in master.base_skills:
+        display = master.skills.display_name(skill)
+        if display and ctx.status.is_verified(display) and display not in resume.skills:
+            resume.skills.append(display)
+    return resume
 
 
 def _check_skills(skills: list[str], ctx: ValidationContext, violations: list[Violation]) -> list[str]:

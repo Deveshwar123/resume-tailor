@@ -154,6 +154,13 @@ def clean_bullet(text: str) -> str:
     return text if not text or text[-1] in ".!?" else text + "."
 
 
+def _new_parts(note: str, degree: str) -> str:
+    """An education note without the parts the degree line already says ("Minor in Computer
+    Science | M.S. Finance" under "B.S. ..., Minor in Computer Science" -> "M.S. Finance")."""
+    seen = textutil.canon(degree)
+    return " | ".join(part.strip() for part in note.split("|") if part.strip() and textutil.canon(part) not in seen)
+
+
 def _gpa(value: float) -> str:
     shown = f"{value:.1f}" if abs(value * 10 - round(value * 10)) < 1e-9 else f"{value:.2f}"
     return f"{config.GPA_LABEL}: {shown}/{config.GPA_SCALE:.1f}"
@@ -207,7 +214,7 @@ def build_view(resume: TailoredResume, master: MasterResume) -> ResumeView:
         if key == "education":
             for edu in master.education:
                 left = edu.school + (f", {edu.location}" if edu.location else "")
-                lines = [edu.degree, *edu.notes]
+                lines = [edu.degree, *(_new_parts(note, edu.degree) for note in edu.notes)]
                 if edu.gpa is not None:
                     lines.append(_gpa(edu.gpa))
                 honors = [h for h in edu.honors if h in resume.honors]
@@ -552,6 +559,26 @@ def fit_to_page(resume: TailoredResume, master: MasterResume, render_fn: RenderF
         layout.font_scale = size / font0
         if attempt("font", f"body font {size:.1f}pt (limit {config.MIN_FONT_PT}pt)"):
             return result
+
+    # Keeping your resume (`base_resume`): before anything is cut, reworded bullets go back to your
+    # own wording, which fits one page - first the ones that grew longer than yours, then the rest.
+    if master.base_resume:
+        originals = {bullet_id: b.text for bullet_id, (_entry, b) in master.bullet_index().items()}
+
+        def reworded() -> list[TailoredBullet]:
+            return [b for _e, _i, b in resume.bullets()
+                    if b.source_bullet_id in originals and b.text != originals[b.source_bullet_id]]
+
+        grown = [b for b in reworded() if len(b.text) > len(originals[b.source_bullet_id])]
+        for label, pick in (("grew longer than your wording", lambda: grown), ("were reworded", reworded)):
+            group = pick()
+            if not group or not budget_left():
+                continue
+            for bullet in group:
+                bullet.history.append(f'page-fit: back to your wording from "{bullet.text}"')
+                bullet.final_text = originals[bullet.source_bullet_id]
+            if attempt("revert", f"{len(group)} bullet(s) that {label} went back to your wording"):
+                return result
 
     # Step 3: remove the lowest-relevance content, one item at a time.
     def entry_score(entry: TailoredEntry) -> float:

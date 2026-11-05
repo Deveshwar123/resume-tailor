@@ -338,6 +338,11 @@ class MasterResume(BaseModel):
     skills: SkillsBank = Field(default_factory=SkillsBank)
     certifications: list[str] = Field(default_factory=list)
     awards: list[Award] = Field(default_factory=list)
+    # Your resume as you send it: the ids of its experiences and projects, and its skills. When set,
+    # every tailored resume keeps all of these entries and every approved bullet of each (reworded
+    # for the job, never cut), adds no other entry, and lists these skills (job matches first).
+    base_resume: list[str] = Field(default_factory=list)
+    base_skills: list[str] = Field(default_factory=list)
 
     # -- lookups -----------------------------------------------------------
     def entries(self) -> Iterator[Entry]:
@@ -388,6 +393,10 @@ class MasterResume(BaseModel):
             claim(award.id, "award")
             if not award.text.strip():
                 problems.append(f"award {award.id}: text is required")
+        known_entries = {entry.id for entry in self.entries()}
+        for entry_id in self.base_resume:
+            if entry_id not in known_entries:
+                problems.append(f'base_resume: "{entry_id}" is not an experience or project id')
         for entry in self.entries():
             label = f"{entry.kind} {entry.display_org!r}"
             claim(entry.id, label)
