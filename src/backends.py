@@ -271,13 +271,14 @@ class OllamaLLM:
 
 
 class HttpJsonLLM:
-    """OpenAI or Google Gemini over HTTPS, with the key in TAILOR_API_KEY (Job Agent passes it from
+    """OpenAI, DeepSeek or Google Gemini over HTTPS, with the key in TAILOR_API_KEY (Job Agent passes it from
     the macOS Keychain; it is never written to a file or a log). Replies are JSON checked against the
     schema, with one retry like the local model. No web research: research is skipped."""
 
     billing = "api"
     can_search = False
     URLS = {"openai": "https://api.openai.com/v1/chat/completions",
+            "deepseek": "https://api.deepseek.com/chat/completions",      # OpenAI-compatible
             "gemini": "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"}
 
     def __init__(self, provider: str, tracker: UsageTracker | None = None) -> None:
@@ -291,16 +292,23 @@ class HttpJsonLLM:
         fast = model == config.FAST_MODEL
         if self.provider == "openai":
             return os.environ.get("OPENAI_FAST_MODEL" if fast else "OPENAI_MODEL") or ("gpt-4.1-mini" if fast else "gpt-4.1")
+        if self.provider == "deepseek":
+            return os.environ.get("DEEPSEEK_FAST_MODEL" if fast else "DEEPSEEK_MODEL") or "deepseek-chat"
         return os.environ.get("GEMINI_FAST_MODEL" if fast else "GEMINI_MODEL") or ("gemini-flash-latest" if fast else "gemini-pro-latest")
 
     def _ask(self, model: str, system: str, messages: list[dict], schema: dict, max_tokens: int | None) -> tuple[str, int, int]:
-        if self.provider == "openai":
+        if self.provider in ("openai", "deepseek"):
             body = {"model": model, "messages": [{"role": "system", "content": system}, *messages],
                     "response_format": {"type": "json_object"}, "temperature": 0.2}
-            if max_tokens:
+            if max_tokens and self.provider == "openai":
                 body["max_completion_tokens"] = max_tokens
-            r = requests.post(self.URLS["openai"], json=body, timeout=300,
-                              headers={"Authorization": f"Bearer {self.key}"})
+            elif self.provider == "deepseek":
+                body["max_tokens"] = min(max_tokens or 8192, 8192)          # deepseek-chat's output limit
+            try:   # a site that can't be reached fails in 15 s, so the next backend starts quickly
+                r = requests.post(self.URLS[self.provider], json=body, timeout=(15, 300),
+                                  headers={"Authorization": f"Bearer {self.key}"})
+            except requests.RequestException as exc:
+                raise LLMError(f"{self.provider} couldn't be reached ({type(exc).__name__}).") from None
         else:
             return self._gemini(model, system, messages, max_tokens)
         if r.status_code != 200:
