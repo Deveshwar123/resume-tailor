@@ -109,7 +109,11 @@ def make_llm(env: dict[str, str]):
         from src.backends import OllamaLLM
 
         return OllamaLLM()
-    raise ConfigError(f'Unknown LLM_BACKEND "{config.LLM_BACKEND}".', "Use anthropic, claude_code, or ollama.")
+    if backend in ("openai", "gemini"):
+        from src.backends import HttpJsonLLM
+
+        return HttpJsonLLM(backend)
+    raise ConfigError(f'Unknown LLM_BACKEND "{config.LLM_BACKEND}".', "Use anthropic, claude_code, ollama, openai or gemini.")
 
 
 def run_startup(*, need_api: bool = True, verify_models: bool = True, quiet: bool = False,

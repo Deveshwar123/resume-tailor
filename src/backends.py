@@ -18,6 +18,7 @@ checks every bullet against the fact bank in code.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -267,3 +268,101 @@ class OllamaLLM:
             self.parse(purpose="check", model=model, system="Answer with ok = true.", user="Are you there?", schema=probe)
         except LLMError as exc:
             raise ConfigError(f"The local model could not answer: {exc.message}", exc.hint) from exc
+
+
+class HttpJsonLLM:
+    """OpenAI or Google Gemini over HTTPS, with the key in TAILOR_API_KEY (Job Agent passes it from
+    the macOS Keychain; it is never written to a file or a log). Replies are JSON checked against the
+    schema, with one retry like the local model. No web research: research is skipped."""
+
+    billing = "api"
+    can_search = False
+    URLS = {"openai": "https://api.openai.com/v1/chat/completions",
+            "gemini": "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"}
+
+    def __init__(self, provider: str, tracker: UsageTracker | None = None) -> None:
+        self.provider = provider
+        self.key = os.environ.get("TAILOR_API_KEY", "")
+        if not self.key:
+            raise LLMError(f"No API key for {provider}.", "Job Agent passes it as TAILOR_API_KEY.")
+        self.tracker = tracker or UsageTracker()
+
+    def model_for(self, model: str) -> str:
+        fast = model == config.FAST_MODEL
+        if self.provider == "openai":
+            return os.environ.get("OPENAI_FAST_MODEL" if fast else "OPENAI_MODEL") or ("gpt-4.1-mini" if fast else "gpt-4.1")
+        return os.environ.get("GEMINI_FAST_MODEL" if fast else "GEMINI_MODEL") or ("gemini-flash-latest" if fast else "gemini-pro-latest")
+
+    def _ask(self, model: str, system: str, messages: list[dict], schema: dict, max_tokens: int | None) -> tuple[str, int, int]:
+        if self.provider == "openai":
+            body = {"model": model, "messages": [{"role": "system", "content": system}, *messages],
+                    "response_format": {"type": "json_object"}, "temperature": 0.2}
+            if max_tokens:
+                body["max_completion_tokens"] = max_tokens
+            r = requests.post(self.URLS["openai"], json=body, timeout=300,
+                              headers={"Authorization": f"Bearer {self.key}"})
+        else:
+            return self._gemini(model, system, messages, max_tokens)
+        if r.status_code != 200:
+            raise LLMError(f"{self.provider} returned HTTP {r.status_code}: {r.text[:200]}")
+        d = r.json()
+        u = d.get("usage") or {}
+        return d["choices"][0]["message"]["content"] or "", u.get("prompt_tokens", 0), u.get("completion_tokens", 0)
+
+    _working: dict[str, str] = {}      # wanted model -> the Gemini model that answered (busy/quota ones skipped)
+
+    def _gemini(self, model: str, system: str, messages: list[dict], max_tokens: int | None) -> tuple[str, int, int]:
+        chain = [model, "gemini-flash-latest", "gemini-3.5-flash", "gemini-flash-lite-latest"]
+        chain = list(dict.fromkeys([self._working.get(model, model), *chain]))
+        last = ""
+        for name in chain:
+            body = {"systemInstruction": {"parts": [{"text": system}]},
+                    "contents": [{"role": "model" if m["role"] == "assistant" else "user", "parts": [{"text": m["content"]}]}
+                                 for m in messages],
+                    "generationConfig": {"responseMimeType": "application/json", "temperature": 0.2,
+                                         **({"maxOutputTokens": max_tokens} if max_tokens else {})}}
+            r = requests.post(self.URLS["gemini"].format(model=name), json=body, timeout=300,
+                              headers={"x-goog-api-key": self.key})
+            if r.status_code in (429, 503):               # busy or rate-limited: often gone in seconds, once more
+                time.sleep(10)
+                r = requests.post(self.URLS["gemini"].format(model=name), json=body, timeout=300,
+                                  headers={"x-goog-api-key": self.key})
+            if r.status_code in (404, 429, 500, 503):     # not for this key, out of quota, or busy: next model
+                last = f"{name}: HTTP {r.status_code}"
+                continue
+            if r.status_code != 200:
+                raise LLMError(f"gemini returned HTTP {r.status_code}: {r.text[:200]}")
+            self._working[model] = name
+            d = r.json()
+            u = d.get("usageMetadata") or {}
+            parts = ((d.get("candidates") or [{}])[0].get("content") or {}).get("parts") or []
+            return "".join(p.get("text", "") for p in parts), u.get("promptTokenCount", 0), u.get("candidatesTokenCount", 0)
+        raise LLMError(f"No Gemini model answered ({last}).")
+
+    def parse(self, *, purpose: str, model: str, system: str, user: str, schema: type[T],
+              cache_system: bool = True, max_tokens: int | None = None) -> T:
+        name = self.model_for(model)
+        shape = json.dumps(strict_schema(schema))
+        system = f"{system}\n\nReply with JSON only, matching this JSON schema exactly:\n{shape}"
+        messages = [{"role": "user", "content": user}]
+        last_error = ""
+        for _attempt in range(2):
+            started = time.monotonic()
+            content, tin, tout = self._ask(name, system, messages, strict_schema(schema), max_tokens)
+            self.tracker.record(purpose, name, SimpleNamespace(
+                input_tokens=tin, output_tokens=tout, cache_read_input_tokens=0, cache_creation_input_tokens=0,
+                server_tool_use=None), time.monotonic() - started)
+            try:
+                return schema.model_validate(json.loads(content))
+            except (json.JSONDecodeError, ValidationError) as exc:
+                last_error = str(exc)[:300]
+                messages += [{"role": "assistant", "content": content},
+                             {"role": "user", "content": f"That was not valid for the required JSON schema ({last_error}). "
+                                                         "Return the complete JSON again, exactly matching the schema."}]
+        raise LLMError(f"{self.provider}'s {purpose} output did not match the expected structure: {last_error}")
+
+    def search(self, **_kwargs) -> SearchResult:
+        raise LLMError(f"{self.provider} research is off here, so company research is skipped.")
+
+    def verify_models(self, model_ids: list[str]) -> None:
+        return None
