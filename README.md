@@ -24,7 +24,7 @@ link -> fetch -> analyze -> eligibility -> research -> tailor -> validate
 
 **Stack:** Python 3.11+ · Claude through the Anthropic SDK (structured outputs, web search), Claude Code,
 or a local Ollama model · Pydantic schemas · docxtpl + LibreOffice for DOCX/PDF · pypdf for ATS checks ·
-352 pytest tests that run offline
+391 pytest tests that run offline
 
 <p align="center"><img src="docs/sample-resume.png" width="70%" alt="Sample one-page resume rendered by the tool from the fictional example fact bank"></p>
 <p align="center"><sub>A page rendered from the fictional example fact bank by <code>scripts/preview.py</code> (no API key needed). ATS checks: 10/10.</sub></p>
@@ -339,7 +339,7 @@ allowlist, and extra official domains per company.
 ## Tests
 
 ```bash
-pytest          # 352 tests, about a minute; no API key and no network needed
+pytest          # 391 tests, about a minute; no API key and no network needed
 ```
 
 Claude is mocked everywhere. Covered: the validator (including "Assisted a team in developing a
